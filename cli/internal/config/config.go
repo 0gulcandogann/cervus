@@ -34,7 +34,9 @@ type Config struct {
 var (
 	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 	arnRe  = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:role/.+$`)
-	mfaRe  = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:mfa/.+$`)
+	// The region becomes part of the STS hostname, so it must not be able to name another host.
+	regionRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+	mfaRe    = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:mfa/.+$`)
 )
 
 func ValidName(s string) bool { return nameRe.MatchString(s) }
@@ -111,6 +113,9 @@ func (i Identity) Validate(name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("identity name %q must be lowercase letters, digits, '-' or '_' (max 32)", name)
 	}
+	if i.Region != "" && !regionRe.MatchString(i.Region) {
+		return fmt.Errorf("region %q must look like us-east-1", i.Region)
+	}
 	if i.MFASerial != "" && !mfaRe.MatchString(i.MFASerial) {
 		return fmt.Errorf("mfa serial must look like arn:aws:iam::<account>:mfa/<name>")
 	}
@@ -123,6 +128,9 @@ func (r Role) Validate(name string, c *Config) error {
 	}
 	if _, ok := c.Identities[r.Identity]; !ok {
 		return fmt.Errorf("unknown identity %q", r.Identity)
+	}
+	if r.Region != "" && !regionRe.MatchString(r.Region) {
+		return fmt.Errorf("region %q must look like us-east-1", r.Region)
 	}
 	if r.ARN != "" && !arnRe.MatchString(r.ARN) {
 		return fmt.Errorf("role arn must look like arn:aws:iam::<account>:role/<name>")

@@ -46,6 +46,12 @@ class H(http.server.BaseHTTPRequestHandler):
         with open(LOG, "a") as f:
             f.write(json.dumps(rec) + "\n")
 
+        try:
+            with open(LOG + ".revoked") as f:
+                if key in f.read().split():
+                    return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
+        except FileNotFoundError:
+            pass
         if not (key in ("AKIATESTKEY", "AKIANEWKEY", "AKIAOTHERUSER", "ASIASESSION") or key.startswith("ASIAROLE")):
             return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
         if q.get("SerialNumber") and q.get("TokenCode") != totp(int(time.time())):

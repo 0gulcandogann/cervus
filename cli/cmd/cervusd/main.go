@@ -200,6 +200,9 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 		return fail(0, "bad_request", "invalid JSON")
 	}
 	if h, ok := apiHandlers[req.Op]; ok {
+		if aerr := checkParamKeys(req.Params); aerr != nil {
+			return outResponse{ID: req.ID, Error: aerr}
+		}
 		data, aerr := h(app, req.Params)
 		if aerr != nil {
 			return outResponse{ID: req.ID, Error: aerr}
@@ -231,6 +234,21 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 		return outResponse{ID: req.ID, Error: rerr}
 	}
 	return outResponse{ID: req.ID, OK: true, Data: data}
+}
+
+// checkParamKeys refuses keys that are not lowercase. Go matches struct fields case-insensitively but
+// the audit log reads exact keys, so {"id":"decoy","ID":"work"} would change one thing and log another.
+func checkParamKeys(raw json.RawMessage) *vaultproc.RemoteError {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil // not an object: the handler reports it
+	}
+	for k := range fields {
+		if k != strings.ToLower(k) {
+			return &vaultproc.RemoteError{Code: "bad_request", Message: fmt.Sprintf("parameter %q must be lowercase", k)}
+		}
+	}
+	return nil
 }
 
 // reservedSecretPrefixes name secrets that only the daemon may touch: long-term access keys and

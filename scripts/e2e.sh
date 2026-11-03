@@ -38,7 +38,7 @@ PY
 )
 echo "$RAW" | grep -q unknown_op && ok "non-allowlisted op rejected" || bad "allowlist"
 
-pkill -x cervus-vault; sleep 0.5
+pkill -P "$D" -x cervus-vault; sleep 0.5
 "$B/cervus" secret get aws-work 2>&1 | grep -q "crashed" && ok "vault crash reported cleanly" || bad "crash report"
 "$B/cervus" status | grep -q locked && ok "restarted vault is locked" || bad "restart locked"
 echo "$PASS" | "$B/cervus" unlock >/dev/null
@@ -82,7 +82,8 @@ printf '%s\n%s\n%s\n' "$NEW" "$NEW2" "$NEW2" | "$B/cervus" passwd >/dev/null 2>&
 echo "$NEW" | "$B/cervus" unlock 2>&1 | grep -qi "wrong passphrase" && ok "the old passphrase stops working" || bad "old passphrase after passwd"
 echo "$NEW2" | "$B/cervus" unlock >/dev/null && ok "the new passphrase unlocks" || bad "new passphrase after passwd"
 printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover >/dev/null 2>&1 && ok "the recovery key survives passwd" || bad "recovery after passwd"
-! grep -rqE "$NEW2|WRONG-CURRENT-PASS" "$T/config.json" "$T/d.log" "$T"/audit.log 2>/dev/null && ok "no passphrase in the logs" || bad "passphrase in logs"
+grep -q "cervus recover" <(printf '%s\n%s\n%s\n' "$NEW" "$NEW2" "$NEW2" | "$B/cervus" passwd 2>&1) && ok "passwd explains what to do after a leak" || bad "passwd leak note"
+! grep -rqE "$NEW2|$NEW|WRONG-CURRENT-PASS" "$T/config.json" "$T/d.log" "$T"/audit.log "$T/vault2" 2>/dev/null && ok "no passphrase in the logs" || bad "passphrase in logs"
 kill "$D3" 2>/dev/null
 
 echo; [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }

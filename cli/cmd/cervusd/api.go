@@ -454,6 +454,8 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 		AccessKeyID     string  `json:"access_key_id"`
 		SecretAccessKey string  `json:"secret_access_key"`
 		Verify          *bool   `json:"verify"`
+
+		AllowDifferentPrincipal bool `json:"allow_different_principal"`
 	}
 	if e := parse(params, &p); e != nil {
 		return nil, e
@@ -493,31 +495,41 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 	}
 
 	res := map[string]string{}
+	verified := p.Rotate && (p.Verify == nil || *p.Verify)
 	if p.Rotate {
-		creds := awsapi.Credentials{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey}
-		verify := p.Verify == nil || *p.Verify
-		if verify {
-			arn, account, err := a.stsFor(ident.Region).GetCallerIdentity(creds)
-			if err != nil {
-				return nil, awsErr(err)
-			}
-			res["arn"], res["account"] = arn, account
+		locked, e := a.vaultLocked()
+		if e != nil {
+			return nil, e
 		}
+		if locked {
+			return nil, fe("locked", "vault is locked; run `cervus unlock`")
+		}
+	}
+	if verified {
+		creds := awsapi.Credentials{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey}
+		arn, account, err := a.stsFor(ident.Region).GetCallerIdentity(creds)
+		if err != nil {
+			return nil, awsErr(err)
+		}
+		res["arn"], res["account"] = arn, account
 		old, e := a.longTermCreds(p.ID)
 		if e != nil && e.Code != "not_found" {
 			return nil, e
 		}
-		if verify && e == nil {
-			// The old key may already be revoked, so a failed lookup is not an error here.
-			if oldArn, _, err := a.stsFor(ident.Region).GetCallerIdentity(old); err == nil && oldArn != res["arn"] {
+		if e == nil {
+			oldArn, _, err := a.stsFor(ident.Region).GetCallerIdentity(old)
+			switch {
+			case err != nil:
+				res["old_key_unverified"] = "true" // usually a key that is already revoked
+			case oldArn != arn && !p.AllowDifferentPrincipal:
+				return nil, fe("principal_changed", "the new key belongs to %s but the old one to %s; to accept that, re-run with --allow-different-principal", arn, oldArn)
+			case oldArn != arn:
 				res["previous_arn"] = oldArn
 			}
 		}
-		blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
-		if e := a.vaultPut("aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
-			return nil, e
-		}
 	}
+	// Settings go first: if they cannot be saved the old key is still there, and a saved region
+	// without a new key does no harm.
 	cfg.Identities[p.ID] = ident
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return nil, fe("internal", "%v", err)
@@ -528,7 +540,35 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 			delete(a.roleCache, n)
 		}
 	}
+	if p.Rotate {
+		blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
+		if e := a.vaultPut("aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
+			return nil, fe(e.Code, "the settings were saved but the key was not replaced: %s", e.Message)
+		}
+		event := map[string]any{"id": p.ID, "verified": verified}
+		if arn, ok := res["arn"]; ok {
+			event["arn"] = arn
+		}
+		if prev, ok := res["previous_arn"]; ok {
+			event["previous_arn"] = prev
+		}
+		a.audit.Append("identity.key_replaced", event)
+	}
 	return res, nil
+}
+
+func (a *app) vaultLocked() (bool, *apiErr) {
+	data, e := a.vaultCall("status", map[string]string{})
+	if e != nil {
+		return false, e
+	}
+	var st struct {
+		Locked bool `json:"locked"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return false, fe("internal", "bad vault reply")
+	}
+	return st.Locked, nil
 }
 
 // identityVerifyKey tells a caller that already holds a key whether the vault stored the same one,
@@ -652,8 +692,9 @@ func (a *app) roleAdd(params json.RawMessage) (any, *apiErr) {
 	return map[string]any{}, nil
 }
 
-// roleEdit changes only the fields it is given. Shells on the role stay on it and get fresh
-// credentials on their next use.
+// roleEdit changes only the fields it is given. A change of target or a new confirmation takes
+// active shells off the role, so a terminal labelled with this role cannot silently start acting
+// on another one or skip the confirmation. Other changes keep them on it with fresh credentials.
 func (a *app) roleEdit(params json.RawMessage) (any, *apiErr) {
 	var p struct {
 		Name         string  `json:"name"`
@@ -680,6 +721,7 @@ func (a *app) roleEdit(params json.RawMessage) (any, *apiErr) {
 	if !ok {
 		return nil, fe("not_found", "unknown role %q", p.Name)
 	}
+	old := r
 	if p.Identity != nil {
 		r.Identity = *p.Identity
 	}
@@ -706,7 +748,16 @@ func (a *app) roleEdit(params json.RawMessage) (any, *apiErr) {
 		return nil, fe("internal", "%v", err)
 	}
 	delete(a.roleCache, p.Name)
-	return map[string]any{}, nil
+	removed := 0
+	if r.Identity != old.Identity || r.ARN != old.ARN || (r.Confirm && !old.Confirm) {
+		for s, role := range a.sessions {
+			if role == p.Name {
+				delete(a.sessions, s)
+				removed++
+			}
+		}
+	}
+	return map[string]any{"shells_removed": removed}, nil
 }
 
 func (a *app) roleList(params json.RawMessage) (any, *apiErr) {

@@ -52,3 +52,24 @@ func TestValidation(t *testing.T) {
 		t.Error("identity validation too lax")
 	}
 }
+
+func TestRegionMustLookLikeARegion(t *testing.T) {
+	c := New()
+	c.Identities["work"] = Identity{}
+	for _, bad := range []string{"evil.example.com/#", "US-EAST-1", "a b", "eu\x1b[31m"} {
+		if err := (Identity{Region: bad}).Validate("work"); err == nil {
+			t.Errorf("identity region %q should be refused", bad)
+		}
+		if err := (Role{Identity: "work", MFA: "none", Region: bad}).Validate("r", c); err == nil {
+			t.Errorf("role region %q should be refused", bad)
+		}
+	}
+	for _, good := range []string{"", "us-east-1", "ap-southeast-3"} {
+		if err := (Identity{Region: good}).Validate("work"); err != nil {
+			t.Errorf("identity region %q: %v", good, err)
+		}
+		if err := (Role{Identity: "work", MFA: "none", Region: good}).Validate("r", c); err != nil {
+			t.Errorf("role region %q: %v", good, err)
+		}
+	}
+}

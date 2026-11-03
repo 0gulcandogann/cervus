@@ -61,3 +61,26 @@ func TestPublicSecretOpsAllowOrdinaryNames(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIOpsRefuseParamKeysTheAuditLogWouldMisread(t *testing.T) {
+	cases := map[string]string{
+		"decoy id":        `{"id":1,"op":"identity.update","params":{"id":"decoy","ID":"work","region":"eu-west-1"}}`,
+		"hidden rotate":   `{"id":1,"op":"identity.update","params":{"id":"work","ROTATE":true}}`,
+		"decoy role name": `{"id":1,"op":"role.edit","params":{"name":"decoy","NAME":"dev","arn":""}}`,
+		"mixed case use":  `{"id":1,"op":"use","params":{"session":"s","Role":"dev"}}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := errCode(t, testApp(t), line); got != "bad_request" {
+				t.Fatalf("want bad_request, got %q", got)
+			}
+		})
+	}
+}
+
+func TestAPIOpsAllowLowercaseParamKeys(t *testing.T) {
+	line := `{"id":1,"op":"role.edit","params":{"name":"ghost","mfa":"none"}}`
+	if got := errCode(t, testApp(t), line); got != "not_found" {
+		t.Fatalf("want not_found, got %q", got)
+	}
+}

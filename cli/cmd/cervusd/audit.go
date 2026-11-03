@@ -171,7 +171,7 @@ var auditedOps = map[string][]string{
 	"passwd":              nil,
 	"recover":             {"drop_local"},
 	"identity.add":        {"id", "region"},
-	"identity.update":     {"id", "region", "rotate"},
+	"identity.update":     {"id", "region", "mfa_serial", "rotate", "verify", "allow_different_principal"},
 	"identity.remove":     {"id"},
 	"identity.verify_key": {"id"},
 	"identity.mfa_import": {"id"},

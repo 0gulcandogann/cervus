@@ -249,6 +249,8 @@ func cmdPasswd() error {
 		return err
 	}
 	fmt.Println("Passphrase changed. Your secrets and your recovery key are unchanged.")
+	fmt.Println("If the old passphrase or a copy of the vault was exposed, this is not enough: an old copy still opens")
+	fmt.Println("with the old passphrase. Run `cervus recover` for a new device key and rotate your secrets.")
 	return nil
 }
 
@@ -418,11 +420,15 @@ func cmdIdentity(args []string) error {
 		serial := fs.String("mfa-serial", "", "MFA device ARN; empty removes it")
 		rotate := fs.Bool("rotate-key", false, "replace the stored access key (asks for the new one)")
 		noVerify := fs.Bool("no-verify", false, "do not check the new key against AWS")
-		id, err := parseWithName(fs, args[1:], "usage: cervus identity update <name> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify]")
+		allowOther := fs.Bool("allow-different-principal", false, "accept a key that belongs to a different IAM principal")
+		id, err := parseWithName(fs, args[1:], "usage: cervus identity update <name> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify] [--allow-different-principal]")
 		if err != nil {
 			return err
 		}
-		params := map[string]any{"id": id, "rotate": *rotate, "verify": !*noVerify}
+		if !*rotate && (*noVerify || *allowOther) {
+			return errors.New("--no-verify and --allow-different-principal work only with --rotate-key")
+		}
+		params := map[string]any{"id": id, "rotate": *rotate, "verify": !*noVerify, "allow_different_principal": *allowOther}
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "region":
@@ -446,6 +452,7 @@ func cmdIdentity(args []string) error {
 			Arn         string `json:"arn"`
 			Account     string `json:"account"`
 			PreviousArn string `json:"previous_arn"`
+			OldKey      string `json:"old_key_unverified"`
 		}
 		if err := client.Call("identity.update", params, &out); err != nil {
 			return err
@@ -455,6 +462,9 @@ func cmdIdentity(args []string) error {
 		}
 		if out.PreviousArn != "" {
 			fmt.Printf("Warning: the old key belonged to %s and the new one to %s; check that your roles still trust it.\n", out.PreviousArn, out.Arn)
+		}
+		if out.OldKey != "" {
+			fmt.Println("Note: the old key could not be checked (revoked?), so it was not compared with the new one.")
 		}
 		fmt.Printf("Identity %q updated.\n", id)
 		if *rotate {
@@ -566,10 +576,16 @@ func cmdRole(args []string) error {
 				params["duration_secs"] = int(dur.Seconds())
 			}
 		})
-		if err := client.Call("role.edit", params, nil); err != nil {
+		var out struct {
+			ShellsRemoved int `json:"shells_removed"`
+		}
+		if err := client.Call("role.edit", params, &out); err != nil {
 			return err
 		}
 		fmt.Printf("Role %q updated.\n", name)
+		if out.ShellsRemoved > 0 {
+			fmt.Printf("%d shell(s) must run `cervus use %s` again.\n", out.ShellsRemoved, name)
+		}
 		return nil
 	case "list":
 		var out struct {
@@ -849,7 +865,7 @@ Vault:
 AWS:
   identity add <n> [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
   identity mfa-import <n>    Store the MFA seed for an identity (device-only)
-  identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN]
+  identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify] [--allow-different-principal]
                              Rotate the key or change settings; roles and MFA seed stay
   identity list | remove <n>
   role add <n> --identity I [--arn ARN] [--mfa none|once|always] [--confirm] [--duration 1h]

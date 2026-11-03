@@ -73,6 +73,8 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - macOS code paths (peer UID check, ptrace denial) are untested.
 - Go cannot zeroize memory; secrets passing through the daemon are not wiped.
 - The audit log detects edits and deletions in the middle, but not truncation of its end.
+- A program running as your user is outside the protection boundary. It can edit `config.json`, replace vault files (they are not authenticated), or use the daemon while the vault is unlocked. Blocking `secret get` and `put` for keys stops direct reads and accidents; it does not make the vault tamper-proof.
+- `passwd` does not undo a leaked passphrase: an old copy of the vault still opens with the old one. After a leak, run `cervus recover` and rotate your secrets.
 - Secret names are visible as file names. Removing a git recipient does not hide old history; rotate the secret.
 
 ## Roadmap

@@ -130,15 +130,37 @@ cv identity update work 2>&1 | grep -q "nothing to change" && ok "identity updat
 cv identity update ghost --region eu-west-1 2>&1 | grep -q "unknown identity" && ok "identity update refuses an unknown identity" || bad "identity update unknown"
 printf 'AKIABADKEY\nBADSECRET\n' | cv identity update work --rotate-key 2>&1 | grep -q "InvalidClientTokenId" && ok "a rejected new key is refused" || bad "rotate bad key"
 vk work AKIATESTKEY SUPERSECRETKEYVALUE | grep -q '"match":true' && ok "a rejected new key keeps the old one" || bad "old key after rejection"
-printf 'AKIAOTHERUSER\nOTHERSECRETVALUE\n' | cv identity update work --rotate-key 2>&1 | grep -q "Warning: .*user/tester.*user/other" && ok "a key of another user gets a warning" || bad "rotate other user warning"
-printf 'AKIANEWKEY\nNEWSECRETVALUE\n' | cv identity update work --rotate-key >/dev/null 2>&1 && ok "identity update --rotate-key" || bad "rotate key"
+printf 'AKIAOTHERUSER\nOTHERSECRETVALUE\n' | cv identity update work --rotate-key 2>&1 | grep -q "allow-different-principal" && ok "a key of another user is refused" || bad "rotate other user refused"
+vk work AKIATESTKEY SUPERSECRETKEYVALUE | grep -q '"match":true' && ok "a refused principal change keeps the old key" || bad "old key after refused principal"
+printf 'AKIAOTHERUSER\nOTHERSECRETVALUE\n' | cv identity update work --rotate-key --allow-different-principal 2>&1 | grep -q "Warning: .*user/tester.*user/other" && ok "--allow-different-principal accepts it with a warning" || bad "rotate other user allowed"
+vk work AKIAOTHERUSER OTHERSECRETVALUE | grep -q '"match":true' && ok "the other user key is stored" || bad "other key stored"
+echo AKIAOTHERUSER > "$LOG.revoked"
+printf 'AKIANEWKEY\nNEWSECRETVALUE\n' | cv identity update work --rotate-key --region eu-central-1 > "$T/rot.txt" 2>&1 && ok "identity update --rotate-key" || bad "rotate key"
+grep -q "could not be checked" "$T/rot.txt" && ok "a revoked old key is reported as not compared" || bad "revoked old key note"
+rm -f "$LOG.revoked"
+cv identity list | grep -q "eu-central-1" && ok "--rotate-key with --region applies both" || bad "rotate with region"
 vk work AKIANEWKEY NEWSECRETVALUE | grep -q '"match":true' && ok "the vault holds the new key" || bad "new key stored"
 cv secret list | grep -q mfa-seed.work && ok "rotating the key keeps the MFA seed" || bad "seed after rotate"
 cv role list | grep -q "^dev " && ok "rotating the key keeps the roles" || bad "roles after rotate"
 export CERVUS_SESSION=shell-rot
 cv use dev >/dev/null 2>&1
 check "the next AssumeRole uses the new key, not a stale cache" "grep -q '\"action\": \"AssumeRole\", \"key\": \"AKIANEWKEY\"' $LOG"
+echo "(waiting for the next 30s TOTP window...)"; sleep $((31 - $(date +%s) % 30))
+cv use stage2 >/dev/null 2>&1
+check "rotation drops the cached MFA session too" "grep -q '\"action\": \"GetSessionToken\", \"key\": \"AKIANEWKEY\"' $LOG"
 check "the new secret is not in plaintext on disk" "! grep -rq NEWSECRETVALUE $T/vault $T/config.json"
+cv identity update work --no-verify 2>&1 | grep -q "only with --rotate-key" && ok "--no-verify needs --rotate-key" || bad "no-verify alone"
+cv identity update work --region 'evil.example.com/#' 2>&1 | grep -q "region" && ok "a malformed region is refused" || bad "region validation"
+cv role edit short --region 'evil.example.com/#' 2>&1 | grep -q "region" && ok "a malformed role region is refused" || bad "role region validation"
+chmod 500 "$T"
+printf 'AKIATESTKEY\nSUPERSECRETKEYVALUE\n' | cv identity update work --rotate-key >/dev/null 2>&1 && bad "failed config save reported success" || ok "a failed save reports failure"
+chmod 700 "$T"
+vk work AKIANEWKEY NEWSECRETVALUE | grep -q '"match":true' && ok "a failed save keeps the old key" || bad "key after failed save"
+cv lock >/dev/null; N=$(grep -c '"key": "AKIATESTKEY"' "$LOG")
+printf 'AKIATESTKEY\nSUPERSECRETKEYVALUE\n' | cv identity update work --rotate-key 2>&1 | grep -qi "locked" && ok "rotation asks to unlock when locked" || bad "rotate locked"
+check "a locked rotation sends nothing to AWS" "[ \"\$(grep -c '\"key\": \"AKIATESTKEY\"' $LOG)\" = $N ]"
+echo "$PASS" | cv unlock >/dev/null
+printf 'AKIANEWKEY\nNEWSECRETVALUE\n' | cv identity update work --rotate-key --no-verify >/dev/null 2>&1 && ok "--no-verify skips the AWS check" || bad "rotate no-verify"
 cv identity update work --mfa-serial "" 2>&1 | grep -q 'needs MFA' && ok "the MFA serial cannot be cleared while a role needs it" || bad "clear serial guard"
 cv identity update work --region us-west-2 >/dev/null && cv identity list | grep -q "us-west-2" && ok "identity update --region" || bad "update region"
 cv identity list | grep -q "$SERIAL" && ok "updating the region keeps the MFA serial" || bad "serial after region"
@@ -149,10 +171,19 @@ cv role edit dev --mfa nonsense 2>&1 | grep -q "mfa must be" && ok "role edit va
 cv role edit dev --confirm --no-confirm 2>&1 | grep -q "not both" && ok "role edit refuses --confirm with --no-confirm" || bad "confirm conflict"
 cv use dev >/dev/null 2>&1
 cv role edit dev --arn arn:aws:iam::123456789012:role/DevTwo && ok "role edit --arn" || bad "role edit arn"
-cv credential-process | grep -q ASIAROLEDevTwo && ok "role edit drops the cached credentials; the shell keeps its role" || bad "role cache after edit"
+cv credential-process 2>&1 | grep -q "no role selected" && ok "changing the ARN takes active shells off the role" || bad "active shell after arn edit"
+cv role edit dev --arn arn:aws:iam::123456789012:role/DevTwo | grep -q "1 shell" && bad "an unchanged ARN should not drop shells" || ok "an unchanged ARN keeps shells"
+cv use dev >/dev/null 2>&1; cv credential-process | grep -q ASIAROLEDevTwo && ok "the shell gets the new role after use" || bad "role after arn edit"
+cv role edit dev --duration 30m | grep -q "must run" && bad "a duration change should keep shells" || ok "a duration change keeps shells"
+cv credential-process | grep -q ASIAROLEDevTwo && ok "a kept shell gets fresh credentials" || bad "credentials after duration edit"
+cv role edit dev --confirm | grep -q "1 shell(s) must run" && ok "--confirm reports the shells it took off the role" || bad "confirm shell count"
+cv credential-process 2>&1 | grep -q "no role selected" && ok "--confirm cannot be skipped by an active shell" || bad "active shell after confirm"
+cv role edit dev --no-confirm >/dev/null
+cv use dev >/dev/null 2>&1
+cv role edit dev --identity work | grep -q "must run" && bad "an unchanged identity should keep shells" || ok "an unchanged identity keeps shells"
 cv role edit dev --confirm >/dev/null; cv use dev 2>&1 </dev/null | grep -q -- "--yes" && ok "role edit --confirm protects the role" || bad "role edit confirm"
 cv role edit dev --no-confirm >/dev/null; cv use dev >/dev/null 2>&1 && ok "role edit --no-confirm removes the protection" || bad "role edit no-confirm"
-cv role list | grep "^dev " | grep -q "DevTwo" && ok "role edit keeps the other fields" || bad "role edit other fields"
+cv role list | grep "^dev " | grep -q "DevTwo" && cv role list | grep "^dev " | grep -q "mfa=none" && ok "role edit keeps the other fields" || bad "role edit other fields"
 
 # --- audit log
 echo "$PASS" | cv unlock >/dev/null 2>&1
@@ -162,6 +193,8 @@ check "audit log records failures with an error code" "echo \"\$AUD\" | grep -q 
 check "audit log records refused access to reserved secrets" "echo \"\$AUD\" | grep -q 'secret.get .*error=denied name=aws-key.work'"
 check "audit log records verify_key by identity" "echo \"\$AUD\" | grep -q 'identity.verify_key .*id=work'"
 check "audit log records key rotation and role edits" "echo \"\$AUD\" | grep -q 'identity.update .*id=work.*rotate=true' && echo \"\$AUD\" | grep -q 'role.edit .*name=dev'"
+check "audit log records each key replacement and whether it was verified" "echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=true' && echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=false' && echo \"\$AUD\" | grep -q 'previous_arn=.*user/tester'"
+check "audit log records an unverified update request" "echo \"\$AUD\" | grep -q 'identity.update .*verify=false'"
 check "audit log never contains secrets, TOTP codes or the passphrase" "! grep -qE 'SUPERSECRETKEYVALUE|NEWSECRETVALUE|OTHERSECRETVALUE|AKIANEWKEY|correct horse|$SEED|SECRET-ASIA' $T/audit.log"
 check "audit log is mode 600" "[ \"\$(stat -c %a $T/audit.log)\" = 600 ]"
 cv audit verify | grep -q intact && ok "audit chain verifies" || bad "audit verify"

@@ -6,7 +6,7 @@ Version: cervus 0.0.5, cervus-vault 0.0.4. Pre-release. Not reviewed. Core role 
 
 | Area | What exists | Test |
 |---|---|---|
-| Vault | age encryption, passphrase-wrapped device key, recovery key, synced vs device-only secrets, idle auto-lock, crash restart (locked) | Rust unit (12) + `e2e.sh` |
+| Vault | age encryption, passphrase-wrapped device key, recovery key, synced vs device-only secrets, idle auto-lock, crash restart (locked) | Rust unit (15) + `e2e.sh` |
 | Recovery | `cervus recover [--drop-local]` | Rust unit + `e2e.sh` |
 | TOTP | RFC 6238 in the vault, seed never leaves it | RFC vectors + cross-check in `e2e_aws.sh` |
 | AWS | own SigV4 (official AWS vector passes), AssumeRole, GetSessionToken, GetCallerIdentity | Go unit + `e2e_aws.sh` |
@@ -52,6 +52,15 @@ Not covered yet: credential refresh on expiry, `cervus migrate` and the shell pi
 - `readHiddenLine`: Ctrl-D and arrow-key bytes enter the passphrase; Backspace removes one byte of a multibyte character.
 - `CERVUS_SESSION=x cervus use r` in an integrated shell ties session `x` to that shell.
 - `reserved_test.go` "escaped name" case contains no escape; `e2e_migrate.sh` unsets `XDG_CONFIG_HOME` late; the `switchRole` doc comment sits above `sendUnlock`.
+
+## Small issues from the key lifecycle review (deferred)
+
+- A bad name or `--mfa-serial` still prompts for the key before failing; `cervus passwd` ignores extra arguments and accepts new == current.
+- `--confirm=false --no-confirm=false` is accepted; the access key ID echoes on a terminal and the secret is not trimmed (same as `identity add`).
+- `.tmp-<pid>` writes use no `O_EXCL`/`O_NOFOLLOW` and leave the file on error; passphrases parsed into `req.params` are not wiped in the vault.
+- A vault crash right after the `passwd` rename says "try again", though the change took effect; `whoami` shows `0 minutes left` and the prompt `[role expired]` after an edit, until the next use.
+- `role edit --mfa` does not warn when the identity has no seed; `mfa=always` edits can hit the code reuse guard within one window; `a.mu` is held across STS calls in `identityUpdate`.
+- The fake STS checks key IDs, not signatures, so "verified" in tests means "known key ID".
 
 ## Task list (in priority order)
 
