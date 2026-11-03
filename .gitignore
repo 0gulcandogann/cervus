@@ -1,0 +1,4 @@
+vault/target/
+bin/
+*.log
+.DS_Store

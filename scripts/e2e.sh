@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# End-to-end test: cervusd + cervus-vault + cervus CLI in a temp directory.
+# Usage: BIN=./bin scripts/e2e.sh
+set -u
+B="${BIN:-$(cd "$(dirname "$0")/.." && pwd)/bin}"
+T="$(mktemp -d)"; mkdir -p "$T/run"
+export CERVUS_SOCKET="$T/run/cervus.sock"
+PASS="correct horse battery"
+FAILS=0
+ok()  { echo "PASS: $1"; }
+bad() { echo "FAIL: $1"; FAILS=$((FAILS+1)); }
+cleanup() { kill "${D:-}" 2>/dev/null; rm -rf "$T"; }
+trap cleanup EXIT
+
+start() { "$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault" --idle-secs "$1" 2>>"$T/d.log" & D=$!; sleep 1; }
+
+start 3600
+"$B/cervus" status | grep -q "not initialized" && ok "status before init" || bad "status before init"
+printf "$PASS\n$PASS\n" | "$B/cervus" init >"$T/init.out" 2>&1 && grep -q "RECOVERY KEY" "$T/init.out" && ok "init prints recovery key" || bad init
+printf 'AKIA-TOP-SECRET-VALUE' | "$B/cervus" secret put aws-work && ok "put" || bad put
+printf 'seed-123' | "$B/cervus" secret put --local --type mfa_seed mfa-work && ok "put local" || bad "put local"
+[ "$("$B/cervus" secret get aws-work)" = "AKIA-TOP-SECRET-VALUE" ] && ok "get roundtrip" || bad "get roundtrip"
+grep -rq "AKIA-TOP-SECRET" "$T/vault" && bad "plaintext secret on disk" || ok "no plaintext secret on disk"
+grep -rq "$PASS" "$T/vault" && bad "passphrase on disk" || ok "no passphrase on disk"
+perm() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+[ "$(perm "$CERVUS_SOCKET")" = 600 ] && [ "$(perm "$T/run")" = 700 ] && [ "$(perm "$T/vault")" = 700 ] \
+  && [ "$(perm "$T/vault/device.key.age")" = 600 ] && ok "file and socket permissions" || bad "permissions"
+"$B/cervus" lock >/dev/null
+"$B/cervus" secret get aws-work 2>&1 | grep -qi locked && ok "locked vault refuses reads" || bad "locked refuses reads"
+echo "wrong passphrase!" | "$B/cervus" unlock 2>&1 | grep -qi "wrong passphrase" && ok "wrong passphrase rejected" || bad "wrong passphrase"
+echo "$PASS" | "$B/cervus" unlock >/dev/null && ok unlock || bad unlock
+
+RAW=$(python3 - "$CERVUS_SOCKET" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b'{"id":7,"op":"put_raw_internal"}\n'); print(s.makefile().readline())
+PY
+)
+echo "$RAW" | grep -q unknown_op && ok "non-allowlisted op rejected" || bad "allowlist"
+
+pkill -x cervus-vault; sleep 0.5
+"$B/cervus" secret get aws-work 2>&1 | grep -q "crashed" && ok "vault crash reported cleanly" || bad "crash report"
+"$B/cervus" status | grep -q locked && ok "restarted vault is locked" || bad "restart locked"
+echo "$PASS" | "$B/cervus" unlock >/dev/null
+[ "$("$B/cervus" secret get aws-work)" = "AKIA-TOP-SECRET-VALUE" ] && ok "data survives crash" || bad "data after crash"
+
+kill "$D"; sleep 0.5
+[ -e "$CERVUS_SOCKET" ] && bad "socket left behind" || ok "socket removed on shutdown"
+
+start 2
+echo "$PASS" | "$B/cervus" unlock >/dev/null; sleep 3
+"$B/cervus" secret get aws-work 2>&1 | grep -qi locked && ok "idle timeout auto-locks" || bad "idle timeout"
+
+echo; [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }

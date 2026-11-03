@@ -1,0 +1,29 @@
+[package]
+name = "cervus-vault"
+version = "0.0.3"
+edition = "2021"
+rust-version = "1.74"
+description = "Cervus secret vault: age-encrypted secrets, zeroized in-memory keys, spoken to over stdio by cervusd"
+
+[[bin]]
+name = "cervus-vault"
+path = "src/main.rs"
+
+[dependencies]
+age = "0.11"
+base64 = "0.22"
+hmac = "0.12"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "abort"
