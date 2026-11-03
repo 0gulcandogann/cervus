@@ -136,6 +136,46 @@ def test_shell(name, argv, setup=()):
         ok("%s: unlocking from the picker completes the switch" % name) if seg else bad("%s: unlock from picker" % name, t.tail())
     ok("%s: the passphrase is not shown on screen" % name) if passphrase not in t.raw[mark:] else bad("%s: passphrase echoed" % name)
 
+    # cervus exec on a terminal with a locked vault: ask, then run; a wrong passphrase runs nothing
+    awscfg = os.path.join(os.path.dirname(os.environ["CERVUS_SOCKET"]), "aws-config")
+    with open(awscfg, "w") as f:
+        f.write("[profile cervus]\ncredential_process = %s credential-process\n" % CERVUS)
+    t.run("export AWS_CONFIG_FILE='%s'" % awscfg)
+    cervus("lock")
+    mark = len(t.raw)
+    t.send("'%s' exec beta -- sh -c 'echo EXEC_RAN_$((40+2))'\r" % CERVUS)
+    seg = t.expect("Passphrase:")
+    if seg is None: bad("%s: exec asks for the passphrase when locked" % name, t.tail())
+    else:
+        ok("%s: exec asks for the passphrase when locked" % name)
+        t.send(passphrase + "\r")
+        seg = t.expect("EXEC_RAN_42")
+        ok("%s: exec unlocks and runs the command" % name) if seg else bad("%s: exec after unlock" % name, t.tail())
+    ok("%s: exec does not show the passphrase" % name) if passphrase not in t.raw[mark:] else bad("%s: exec echoed the passphrase" % name)
+    seg = t.run("echo ECHO_CHECK", "M6")
+    ok("%s: the terminal works normally after exec" % name) if seg and "ECHO_CHECK" in seg else bad("%s: terminal after exec" % name, t.tail())
+
+    cervus("lock")
+    t.send("'%s' exec beta -- sh -c 'echo EXEC_RAN_$((40+3))'\r" % CERVUS)
+    t.expect("Passphrase:")
+    t.send("not the right passphrase\r")
+    seg = t.expect("wrong passphrase")
+    ok("%s: exec reports a wrong passphrase" % name) if seg else bad("%s: exec wrong passphrase" % name, t.tail())
+    seg = t.run("echo AFTER_WRONG", "M7") or ""
+    ok("%s: a wrong passphrase does not run the command" % name) if "EXEC_RAN_43" not in seg else bad("%s: exec ran after a wrong passphrase" % name, seg)
+
+    t.send("'%s' exec gamma -- sh -c 'echo EXEC_RAN_$((40+4))'\r" % CERVUS)
+    seg = t.expect("protected. Switch to it?")
+    if seg is None: bad("%s: exec asks to confirm a protected role" % name, t.tail())
+    else:
+        t.send("y\r")
+        seg = t.expect("Passphrase:")
+        if seg is None: bad("%s: exec asks once for confirmation, then the passphrase" % name, t.tail())
+        else:
+            t.send(passphrase + "\r")
+            seg = t.expect("EXEC_RAN_44")
+            ok("%s: exec confirms, unlocks and runs on a protected role" % name) if seg else bad("%s: exec protected and locked" % name, t.tail())
+
     return t, sid
 
 def main():
