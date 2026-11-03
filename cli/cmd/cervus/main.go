@@ -61,6 +61,8 @@ func main() {
 		err = cmdRole(args)
 	case "use":
 		err = cmdUse(args)
+	case "exec":
+		err = cmdExec(args)
 	case "whoami":
 		err = cmdWhoami()
 	case "pick":
@@ -680,6 +682,25 @@ func switchRole(role string, yes bool, confirm func() (bool, error), ask func() 
 	return out, err
 }
 
+func confirmOnStdin(role string) func() (bool, error) {
+	return func() (bool, error) {
+		if !isTTY(os.Stdin) {
+			return false, fmt.Errorf("role %q is protected; re-run with --yes to confirm", role)
+		}
+		fmt.Fprintf(os.Stderr, "Role %q is protected. Switch to it? [y/N] ", role)
+		line, _ := stdin.ReadString('\n')
+		a := strings.ToLower(strings.TrimSpace(line))
+		return a == "y" || a == "yes", nil
+	}
+}
+
+func askOnStdin() func() (string, error) {
+	if !isTTY(os.Stdin) {
+		return nil
+	}
+	return func() (string, error) { return readSecret("Vault is locked. Passphrase: ") }
+}
+
 func cmdUse(args []string) error {
 	if len(args) == 0 && isTTY(os.Stdin) {
 		return cmdPick()
@@ -690,20 +711,7 @@ func cmdUse(args []string) error {
 	if err != nil {
 		return err
 	}
-	confirm := func() (bool, error) {
-		if !isTTY(os.Stdin) {
-			return false, fmt.Errorf("role %q is protected; re-run with --yes to confirm", role)
-		}
-		fmt.Printf("Role %q is protected. Switch to it? [y/N] ", role)
-		line, _ := stdin.ReadString('\n')
-		a := strings.ToLower(strings.TrimSpace(line))
-		return a == "y" || a == "yes", nil
-	}
-	var ask func() (string, error)
-	if isTTY(os.Stdin) {
-		ask = func() (string, error) { return readSecret("Vault is locked. Passphrase: ") }
-	}
-	out, err := switchRole(role, *yes, confirm, ask)
+	out, err := switchRole(role, *yes, confirmOnStdin(role), askOnStdin())
 	if err != nil {
 		return err
 	}
@@ -873,6 +881,7 @@ AWS:
                              Change only the given settings of a role
   role list | remove <n>
   use [role] [--yes]         Switch this shell to a role (no argument opens the picker)
+  exec <role> [--yes] -- <cmd>  Run one command pinned to a role, in its own session
   pick                       Interactive role picker (bound to Alt+r by init-shell)
   init-shell <zsh|bash> [--prompt] [--install]
                              Shell integration: per-shell session, Alt+r, prompt segment

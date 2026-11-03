@@ -22,17 +22,25 @@ import (
 
 // ---- sessions ----
 
+func newSessionID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "s-" + hex.EncodeToString(b), nil
+}
+
 func cmdSession(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: cervus session <new|register> ...")
 	}
 	switch args[0] {
 	case "new":
-		b := make([]byte, 4)
-		if _, err := rand.Read(b); err != nil {
+		id, err := newSessionID()
+		if err != nil {
 			return err
 		}
-		fmt.Println("s-" + hex.EncodeToString(b))
+		fmt.Println(id)
 		return nil
 	case "register":
 		if len(args) != 3 {

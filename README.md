@@ -10,6 +10,7 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 
 - Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
 - AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
+- One command on one role: `cervus exec prod -- terraform plan` runs in its own session, so switching roles in the shell does not move it. No credentials go into its environment.
 - Changing things later: `identity update --rotate-key` replaces a key without touching its roles or MFA seed, `role edit` changes only the settings you name, and `passwd` changes the passphrase.
 - Roles: `role add` with `--mfa none|once|always`, `--confirm`, `--duration`. `once` fetches one MFA-backed session token and assumes roles from it; `always` uses a fresh code every time.
 - Per-shell sessions: `CERVUS_SESSION=<id> cervus use <role>`. Two shells can hold two roles.
@@ -73,6 +74,7 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - macOS code paths (peer UID check, ptrace denial) are untested.
 - Go cannot zeroize memory; secrets passing through the daemon are not wiped.
 - The audit log detects edits and deletions in the middle, but not truncation of its end.
+- A role belongs to the shell, not the command: a long-running command started in a shell follows that shell's role at its next credential refresh, so `Alt+r` can move it. Use `cervus exec` for anything that keeps running.
 - A program running as your user is outside the protection boundary. It can edit `config.json`, replace vault files (they are not authenticated), or use the daemon while the vault is unlocked. Blocking `secret get` and `put` for keys stops direct reads and accidents; it does not make the vault tamper-proof.
 - `passwd` does not undo a leaked passphrase: an old copy of the vault still opens with the old one. After a leak, run `cervus recover` and rotate your secrets.
 - Secret names are visible as file names. Removing a git recipient does not hide old history; rotate the secret.

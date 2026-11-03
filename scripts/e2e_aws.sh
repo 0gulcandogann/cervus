@@ -185,6 +185,40 @@ cv role edit dev --confirm >/dev/null; cv use dev 2>&1 </dev/null | grep -q -- "
 cv role edit dev --no-confirm >/dev/null; cv use dev >/dev/null 2>&1 && ok "role edit --no-confirm removes the protection" || bad "role edit no-confirm"
 cv role list | grep "^dev " | grep -q "DevTwo" && cv role list | grep "^dev " | grep -q "mfa=none" && ok "role edit keeps the other fields" || bad "role edit other fields"
 
+# --- cervus exec: one command pinned to one role in its own session
+export AWS_CONFIG_FILE="$T/aws-config"; : > "$AWS_CONFIG_FILE"
+touch "$T/ran"; rm -f "$T/ran"
+cv exec dev -- touch "$T/ran" 2>&1 | grep -q "aws-profile" && ok "exec explains a missing AWS profile" || bad "exec missing profile"
+[ ! -e "$T/ran" ] && ok "exec without a profile does not run the command" || bad "exec ran without a profile"
+printf '[profile cervus]\ncredential_process = %s credential-process\n' "$B/cervus" > "$AWS_CONFIG_FILE"
+export CERVUS_SESSION=shell-exec CERVUS_SESSION_OWNER=
+cv use stage2 >/dev/null 2>&1
+OUT=$(AWS_ACCESS_KEY_ID=leftover AWS_SECRET_ACCESS_KEY=leftover cv exec dev -- sh -c 'echo "S=$CERVUS_SESSION P=$AWS_PROFILE K=${AWS_ACCESS_KEY_ID:-none} O=$CERVUS_SESSION_OWNER SELF=$$"; "$0" credential-process' "$B/cervus")
+echo "$OUT" | grep -q "P=cervus K=none" && ok "exec sets the profile and clears leftover keys" || bad "exec environment"
+echo "$OUT" | grep -q ASIAROLEDevTwo && ok "the command gets the role's credentials" || bad "exec credentials"
+SID=$(echo "$OUT" | sed -n 's/^S=\([^ ]*\) .*/\1/p')
+[ -n "$SID" ] && [ "$SID" != shell-exec ] && ok "exec uses its own session" || bad "exec session"
+OWNER=$(echo "$OUT" | sed -n 's/.* O=\([0-9]*\) .*/\1/p'); SELF=$(echo "$OUT" | sed -n 's/.* SELF=\([0-9]*\)$/\1/p')
+[ "$OWNER" = "$SELF" ] && ok "the command itself owns the session" || bad "exec owner"
+cv whoami | grep -q "role stage2" && ok "exec leaves the shell's role alone" || bad "exec shell role"
+cv exec dev -- sh -c 'sleep 2; "$0" credential-process' "$B/cervus" > "$T/pin.txt" 2>&1 & PINNED=$!
+sleep 0.5; cv use short >/dev/null 2>&1; wait "$PINNED"
+grep -q ASIAROLEDevTwo "$T/pin.txt" && ok "switching the shell does not move a running exec" || bad "exec pinned"
+sleep 3
+CERVUS_SESSION=$SID cv credential-process 2>&1 | grep -q "no role selected" && ok "the session ends with the command" || bad "exec session cleanup"
+cv exec dev -- sh -c 'exit 7'; [ $? = 7 ] && ok "exec returns the command's exit code" || bad "exec exit code"
+cv exec dev -- no-such-command-here 2>/dev/null; [ $? = 127 ] && ok "exec reports a missing command with 127" || bad "exec missing command"
+cv exec dev 2>&1 | grep -q "usage" && ok "exec without -- shows usage" || bad "exec usage"
+cv exec ghost -- true 2>&1 | grep -q "unknown role" && ok "exec refuses an unknown role" || bad "exec unknown role"
+cv role add guarded --identity work --arn arn:aws:iam::123456789012:role/Guarded --confirm >/dev/null
+rm -f "$T/ran"; cv exec guarded -- touch "$T/ran" 2>&1 </dev/null | grep -q -- "--yes" && ok "exec asks for --yes on a protected role" || bad "exec confirm"
+[ ! -e "$T/ran" ] && ok "a refused exec does not run the command" || bad "exec ran unconfirmed"
+cv exec guarded --yes -- touch "$T/ran" && [ -e "$T/ran" ] && ok "exec --yes runs on a protected role" || bad "exec --yes"
+cv lock >/dev/null; rm -f "$T/ran"
+cv exec dev -- touch "$T/ran" 2>&1 </dev/null | grep -qi "locked" && [ ! -e "$T/ran" ] && ok "exec on a locked vault does not run the command" || bad "exec locked"
+echo "$PASS" | cv unlock >/dev/null
+unset AWS_CONFIG_FILE CERVUS_SESSION_OWNER
+
 # --- audit log
 echo "$PASS" | cv unlock >/dev/null 2>&1
 AUD=$(cv audit -n 0)
