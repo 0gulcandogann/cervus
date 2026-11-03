@@ -857,7 +857,7 @@ func (a *app) credentials(params json.RawMessage) (any, *apiErr) {
 	defer a.mu.Unlock()
 	role := a.sessions[p.Session]
 	if role == "" {
-		return nil, fe("no_role", "no role selected in this shell; run `cervus use <role>`")
+		return nil, fe("no_role", "no role selected in this shell; run `cervus use <role>`, or restart the command if it was started with `cervus exec`")
 	}
 	cfg, e := a.loadCfg()
 	if e != nil {

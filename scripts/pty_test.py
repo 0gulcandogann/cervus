@@ -156,13 +156,16 @@ def test_shell(name, argv, setup=()):
     ok("%s: the terminal works normally after exec" % name) if seg and "ECHO_CHECK" in seg else bad("%s: terminal after exec" % name, t.tail())
 
     cervus("lock")
-    t.send("'%s' exec beta -- sh -c 'echo EXEC_RAN_$((40+3))'\r" % CERVUS)
+    ran = os.path.join(os.path.dirname(os.environ["CERVUS_SOCKET"]), "wrong-pass-ran")
+    t.send("'%s' exec beta -- touch '%s'\r" % (CERVUS, ran))
     t.expect("Passphrase:")
     t.send("not the right passphrase\r")
     seg = t.expect("wrong passphrase")
     ok("%s: exec reports a wrong passphrase" % name) if seg else bad("%s: exec wrong passphrase" % name, t.tail())
-    seg = t.run("echo AFTER_WRONG", "M7") or ""
-    ok("%s: a wrong passphrase does not run the command" % name) if "EXEC_RAN_43" not in seg else bad("%s: exec ran after a wrong passphrase" % name, seg)
+    seg = t.run("echo AFTER_WRONG", "M7")
+    if seg is None: bad("%s: the shell answers after a wrong passphrase" % name, t.tail())
+    elif os.path.exists(ran): bad("%s: exec ran after a wrong passphrase" % name)
+    else: ok("%s: a wrong passphrase does not run the command" % name)
 
     t.send("'%s' exec gamma -- sh -c 'echo EXEC_RAN_$((40+4))'\r" % CERVUS)
     seg = t.expect("protected. Switch to it?")

@@ -190,7 +190,9 @@ export AWS_CONFIG_FILE="$T/aws-config"; : > "$AWS_CONFIG_FILE"
 touch "$T/ran"; rm -f "$T/ran"
 cv exec dev -- touch "$T/ran" 2>&1 | grep -q "aws-profile" && ok "exec explains a missing AWS profile" || bad "exec missing profile"
 [ ! -e "$T/ran" ] && ok "exec without a profile does not run the command" || bad "exec ran without a profile"
-printf '[profile cervus]\ncredential_process = %s credential-process\n' "$B/cervus" > "$AWS_CONFIG_FILE"
+printf '[profile cervus]\n' > "$AWS_CONFIG_FILE"
+cv exec dev -- touch "$T/ran" 2>&1 | grep -q "credential_process" && [ ! -e "$T/ran" ] && ok "exec refuses a profile that cannot give it the role" || bad "exec empty profile"
+printf '[profile cervus]\ncredential_process = %s credential-process\n' "$(cd "$B" && pwd)/cervus" > "$AWS_CONFIG_FILE"
 export CERVUS_SESSION=shell-exec CERVUS_SESSION_OWNER=
 cv use stage2 >/dev/null 2>&1
 OUT=$(AWS_ACCESS_KEY_ID=leftover AWS_SECRET_ACCESS_KEY=leftover cv exec dev -- sh -c 'echo "S=$CERVUS_SESSION P=$AWS_PROFILE K=${AWS_ACCESS_KEY_ID:-none} O=$CERVUS_SESSION_OWNER SELF=$$"; "$0" credential-process' "$B/cervus")
@@ -205,7 +207,7 @@ cv exec dev -- sh -c 'sleep 2; "$0" credential-process' "$B/cervus" > "$T/pin.tx
 sleep 0.5; cv use short >/dev/null 2>&1; wait "$PINNED"
 grep -q ASIAROLEDevTwo "$T/pin.txt" && ok "switching the shell does not move a running exec" || bad "exec pinned"
 sleep 3
-CERVUS_SESSION=$SID cv credential-process 2>&1 | grep -q "no role selected" && ok "the session ends with the command" || bad "exec session cleanup"
+CERVUS_SESSION=$SID cv credential-process 2>&1 | grep -q "restart the command" && ok "the session ends with the command, and the error says what to do" || bad "exec session cleanup"
 cv exec dev -- sh -c 'exit 7'; [ $? = 7 ] && ok "exec returns the command's exit code" || bad "exec exit code"
 cv exec dev -- no-such-command-here 2>/dev/null; [ $? = 127 ] && ok "exec reports a missing command with 127" || bad "exec missing command"
 cv exec dev 2>&1 | grep -q "usage" && ok "exec without -- shows usage" || bad "exec usage"

@@ -75,6 +75,7 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - Go cannot zeroize memory; secrets passing through the daemon are not wiped.
 - The audit log detects edits and deletions in the middle, but not truncation of its end.
 - A role belongs to the shell, not the command: a long-running command started in a shell follows that shell's role at its next credential refresh, so `Alt+r` can move it. Use `cervus exec` for anything that keeps running.
+- `cervus exec` pins a command only while that command runs. It ends when the started process exits, so background children it leaves behind lose the role; keep the command in the foreground, as in `nohup cervus exec ...`. A daemon restart, or removing or retargeting the role, also ends it: the command fails at its next credential refresh and must be restarted. These cases fail with an error instead of switching roles. A command that runs `cervus use` itself changes its own session.
 - A program running as your user is outside the protection boundary. It can edit `config.json`, replace vault files (they are not authenticated), or use the daemon while the vault is unlocked. Blocking `secret get` and `put` for keys stops direct reads and accidents; it does not make the vault tamper-proof.
 - `passwd` does not undo a leaked passphrase: an old copy of the vault still opens with the old one. After a leak, run `cervus recover` and rotate your secrets.
 - Secret names are visible as file names. Removing a git recipient does not hide old history; rotate the secret.

@@ -14,7 +14,7 @@ Version: cervus 0.0.5, cervus-vault 0.0.4. Pre-release. Not reviewed. Core role 
 | Sessions | per-shell `CERVUS_SESSION`, dead-shell cleanup, `credential_process`, `aws-profile --install` | `e2e_aws.sh`, `e2e_shell.sh` |
 | Shell | `init-shell zsh|bash [--prompt] [--install]`, Alt+r picker, prompt segment | `e2e_shell.sh` (pty) |
 | Migration | `cervus migrate` (plaintext keys -> vault, role profiles import, verify before delete) | `e2e_migrate.sh` |
-| One-command roles | `cervus exec <role> [--yes] -- <cmd>` | Go unit, `e2e_aws.sh` (fake STS only) |
+| One-command roles | `cervus exec <role> [--yes] -- <cmd>` | Go unit, `e2e_aws.sh` (fake STS only), `pty_test.py` |
 | Key lifecycle | `identity update [--rotate-key]`, `role edit`, `passwd` | Rust unit, `e2e.sh`, `e2e_aws.sh` (fake STS only) |
 | Doctor | `cervus doctor`, including the login service | `e2e_migrate.sh` |
 | Login service | `cervus install-service`, `uninstall-service` (systemd user unit; launchd plist content only) | Go unit, `e2e_migrate.sh` with a fake `systemctl` |
@@ -62,6 +62,15 @@ Not covered yet: credential refresh on expiry, `cervus migrate` and the shell pi
 - A vault crash right after the `passwd` rename says "try again", though the change took effect; `whoami` shows `0 minutes left` and the prompt `[role expired]` after an edit, until the next use.
 - `role edit --mfa` does not warn when the identity has no seed; `mfa=always` edits can hit the code reuse guard within one window; `a.mu` is held across STS calls in `identityUpdate`.
 - The fake STS checks key IDs, not signatures, so "verified" in tests means "known key ID".
+
+## Small issues from the `cervus exec` review (deferred)
+
+- A non-executable file, a directory or `PATH=.` says "command not found" with 127; a script without a shebang gives a bare "exec format error".
+- A child that strips `CERVUS_SESSION` but keeps `AWS_PROFILE=cervus` falls back to the `default` session and its role.
+- The audit log cannot tell a pinned run from a shell; removed variables are not named on the terminal.
+- Prompts read stdin, not `/dev/tty`, so `cat x | cervus exec prod -- cmd` cannot confirm or unlock; `use prod 2>/dev/null` waits with no visible prompt.
+- `e2e_aws.sh` uses `sleep` around the pinned run; daemon restart, role removal during a run and outliving children have no automated test.
+- Only aws-cli v1 was used to check credential provider order; the Go SDK and Terraform were not.
 
 ## Task list (in priority order)
 
