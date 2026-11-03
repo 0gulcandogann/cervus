@@ -51,6 +51,8 @@ func main() {
 		}
 	case "recover":
 		err = cmdRecover(args)
+	case "passwd":
+		err = cmdPasswd()
 	case "secret":
 		err = cmdSecret(args)
 	case "identity":
@@ -224,6 +226,32 @@ func cmdRecover(args []string) error {
 	return nil
 }
 
+func cmdPasswd() error {
+	current, err := readSecret("Current passphrase: ")
+	if err != nil {
+		return err
+	}
+	pass, err := readSecret("New passphrase (min 10 characters): ")
+	if err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(pass) < minPassphraseLen {
+		return fmt.Errorf("passphrase must be at least %d characters", minPassphraseLen)
+	}
+	again, err := readSecret("Repeat passphrase: ")
+	if err != nil {
+		return err
+	}
+	if pass != again {
+		return errors.New("passphrases do not match")
+	}
+	if err := client.Call("passwd", map[string]string{"current": current, "new": pass}, nil); err != nil {
+		return err
+	}
+	fmt.Println("Passphrase changed. Your secrets and your recovery key are unchanged.")
+	return nil
+}
+
 func cmdAudit(args []string) error {
 	if len(args) > 0 && args[0] == "verify" {
 		var out struct {
@@ -348,7 +376,7 @@ func cmdSecret(args []string) error {
 
 func cmdIdentity(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus identity <add|list|remove|mfa-import> ...")
+		return errors.New("usage: cervus identity <add|update|list|remove|mfa-import> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -383,6 +411,55 @@ func cmdIdentity(args []string) error {
 			fmt.Printf("Verified with AWS: %s (account %s)\n", out.Arn, out.Account)
 		}
 		fmt.Printf("Identity %q saved; the access key is stored encrypted in the vault.\n", id)
+		return nil
+	case "update":
+		fs := flag.NewFlagSet("identity update", flag.ContinueOnError)
+		region := fs.String("region", "", "default AWS region")
+		serial := fs.String("mfa-serial", "", "MFA device ARN; empty removes it")
+		rotate := fs.Bool("rotate-key", false, "replace the stored access key (asks for the new one)")
+		noVerify := fs.Bool("no-verify", false, "do not check the new key against AWS")
+		id, err := parseWithName(fs, args[1:], "usage: cervus identity update <name> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify]")
+		if err != nil {
+			return err
+		}
+		params := map[string]any{"id": id, "rotate": *rotate, "verify": !*noVerify}
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "region":
+				params["region"] = *region
+			case "mfa-serial":
+				params["mfa_serial"] = *serial
+			}
+		})
+		if *rotate {
+			keyID, err := readLine("New AWS access key ID: ")
+			if err != nil {
+				return err
+			}
+			secret, err := readSecret("New AWS secret access key: ")
+			if err != nil {
+				return err
+			}
+			params["access_key_id"], params["secret_access_key"] = keyID, secret
+		}
+		var out struct {
+			Arn         string `json:"arn"`
+			Account     string `json:"account"`
+			PreviousArn string `json:"previous_arn"`
+		}
+		if err := client.Call("identity.update", params, &out); err != nil {
+			return err
+		}
+		if out.Arn != "" {
+			fmt.Printf("Verified with AWS: %s (account %s)\n", out.Arn, out.Account)
+		}
+		if out.PreviousArn != "" {
+			fmt.Printf("Warning: the old key belonged to %s and the new one to %s; check that your roles still trust it.\n", out.PreviousArn, out.Arn)
+		}
+		fmt.Printf("Identity %q updated.\n", id)
+		if *rotate {
+			fmt.Println("If you are done with the old key, delete it in AWS IAM; Cervus does not do that.")
+		}
 		return nil
 	case "mfa-import":
 		if len(args) != 2 {
@@ -435,7 +512,7 @@ func cmdIdentity(args []string) error {
 
 func cmdRole(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus role <add|list|remove> ...")
+		return errors.New("usage: cervus role <add|edit|list|remove> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -454,6 +531,46 @@ func cmdRole(args []string) error {
 			"name": name, "identity": *identity, "arn": *arn, "region": *region,
 			"mfa": *mfa, "confirm": *confirm, "duration_secs": int(dur.Seconds()),
 		}, nil)
+	case "edit":
+		fs := flag.NewFlagSet("role edit", flag.ContinueOnError)
+		identity := fs.String("identity", "", "identity to authenticate as")
+		arn := fs.String("arn", "", "role ARN to assume; empty uses the identity itself")
+		region := fs.String("region", "", "region override; empty removes it")
+		mfa := fs.String("mfa", "", "none | once | always")
+		confirm := fs.Bool("confirm", false, "ask for confirmation before switching to this role")
+		noConfirm := fs.Bool("no-confirm", false, "stop asking for confirmation")
+		dur := fs.Duration("duration", 0, "session duration, e.g. 1h; 0 uses the default")
+		name, err := parseWithName(fs, args[1:], "usage: cervus role edit <name> [--identity I] [--arn ARN] [--region R] [--mfa none|once|always] [--confirm|--no-confirm] [--duration 1h]")
+		if err != nil {
+			return err
+		}
+		if *confirm && *noConfirm {
+			return errors.New("use --confirm or --no-confirm, not both")
+		}
+		params := map[string]any{"name": name}
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "identity":
+				params["identity"] = *identity
+			case "arn":
+				params["arn"] = *arn
+			case "region":
+				params["region"] = *region
+			case "mfa":
+				params["mfa"] = *mfa
+			case "confirm":
+				params["confirm"] = *confirm
+			case "no-confirm":
+				params["confirm"] = !*noConfirm
+			case "duration":
+				params["duration_secs"] = int(dur.Seconds())
+			}
+		})
+		if err := client.Call("role.edit", params, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Role %q updated.\n", name)
+		return nil
 	case "list":
 		var out struct {
 			Roles []struct {
@@ -722,6 +839,7 @@ func usage() {
 Vault:
   init                       Create the vault (passphrase + recovery key)
   unlock | lock | status     Unlock, lock or inspect the vault
+  passwd                     Change the passphrase
   recover [--drop-local]     Lost your passphrase? Reset it with the recovery key
   secret put [--local] <n>   Store a secret (value from stdin)
   secret get [-n] <n>        Print a secret to stdout
@@ -731,8 +849,12 @@ Vault:
 AWS:
   identity add <n> [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
   identity mfa-import <n>    Store the MFA seed for an identity (device-only)
+  identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN]
+                             Rotate the key or change settings; roles and MFA seed stay
   identity list | remove <n>
   role add <n> --identity I [--arn ARN] [--mfa none|once|always] [--confirm] [--duration 1h]
+  role edit <n> [--identity I] [--arn ARN] [--region R] [--mfa M] [--confirm|--no-confirm] [--duration 1h]
+                             Change only the given settings of a role
   role list | remove <n>
   use [role] [--yes]         Switch this shell to a role (no argument opens the picker)
   pick                       Interactive role picker (bound to Alt+r by init-shell)

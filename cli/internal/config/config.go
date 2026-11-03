@@ -133,7 +133,7 @@ func (r Role) Validate(name string, c *Config) error {
 		return fmt.Errorf("mfa must be none, once or always")
 	}
 	if r.MFA != "none" && c.Identities[r.Identity].MFASerial == "" {
-		return fmt.Errorf("identity %q has no MFA serial; add one with `cervus identity add --mfa-serial`", r.Identity)
+		return fmt.Errorf("identity %q has no MFA serial; add one with `cervus identity update --mfa-serial`", r.Identity)
 	}
 	if r.DurationSecs != 0 && (r.DurationSecs < 900 || r.DurationSecs > 43200) {
 		return fmt.Errorf("duration must be between 15 minutes and 12 hours")

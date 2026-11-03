@@ -46,12 +46,15 @@ class H(http.server.BaseHTTPRequestHandler):
         with open(LOG, "a") as f:
             f.write(json.dumps(rec) + "\n")
 
-        if not (key == "AKIATESTKEY" or key == "ASIASESSION" or key.startswith("ASIAROLE")):
+        if not (key in ("AKIATESTKEY", "AKIANEWKEY", "AKIAOTHERUSER", "ASIASESSION") or key.startswith("ASIAROLE")):
             return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
         if q.get("SerialNumber") and q.get("TokenCode") != totp(int(time.time())):
             return self.err(403, "AccessDenied", "MultiFactorAuthentication failed with invalid MFA one time pass code.")
 
         action = q.get("Action")
+        if action == "GetCallerIdentity" and key == "AKIAOTHERUSER":
+            return self.reply(200, "<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>arn:aws:iam::123456789012:user/other</Arn>"
+                                   "<UserId>AIDAOTHER</UserId><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>")
         if action == "GetCallerIdentity":
             return self.reply(200, "<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>arn:aws:iam::123456789012:user/tester</Arn>"
                                    "<UserId>AIDATEST</UserId><Account>123456789012</Account></GetCallerIdentityResult></GetCallerIdentityResponse>")

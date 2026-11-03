@@ -34,6 +34,7 @@ var publicToVault = map[string]string{
 	"unlock":        "unlock",
 	"recover":       "recover",
 	"lock":          "lock",
+	"passwd":        "change_passphrase",
 	"secret.put":    "put",
 	"secret.get":    "get",
 	"secret.list":   "list",

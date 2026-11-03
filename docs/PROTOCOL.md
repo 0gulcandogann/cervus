@@ -24,6 +24,7 @@ Binary values (secrets) are base64 strings.
 | `unlock` | `{passphrase}` | `unlock` |
 | `recover` | `{recovery_key, passphrase, drop_local?}` | `recover` |
 | `lock` | none | `lock` |
+| `passwd` | `{current, new}` | `change_passphrase` |
 | `secret.put` | `{name, value, type?, scope?}` | `put` |
 | `secret.get` | `{name}` | `get` |
 | `secret.list` | `{prefix?}` | `list` |
@@ -37,10 +38,12 @@ AWS operations are handled by the daemon itself (they use the vault internally a
 |---|---|---|
 | `identity.add` | `{id, region?, mfa_serial?, access_key_id, secret_access_key, verify?}` | `{arn?, account?}` |
 | `identity.list` | none | `{identities: [{name, region, mfa_serial}]}` |
+| `identity.update` | `{id, region?, mfa_serial?, rotate?, access_key_id?, secret_access_key?, verify?}` | `{arn?, account?, previous_arn?}` |
 | `identity.remove` | `{id}` | `{}` |
 | `identity.verify_key` | `{id, access_key_id, secret_access_key}` (compares with the stored key) | `{match}` |
 | `identity.mfa_import` | `{id, seed}` (base32; stored device-only) | `{mfa_serial_configured}` |
 | `role.add` | `{name, identity, arn?, region?, mfa?: "none"\|"once"\|"always", confirm?, duration_secs?}` | `{}` |
+| `role.edit` | `{name, identity?, arn?, region?, mfa?, confirm?, duration_secs?}` (only the given fields change) | `{}` |
 | `role.list` / `role.remove` | none / `{name}` | `{roles}` / `{}` |
 | `use` | `{session, role, confirmed?, pid?}` (`pid` also registers the shell, for one the daemon has forgotten) | `{role, expires_at}` |
 | `credentials` | `{session}` | AWS `credential_process` JSON (Version 1) |
@@ -65,6 +68,7 @@ Planned: audit, session listing.
 | `status` | none | `{initialized, locked, version, idle_timeout_secs, dir}` |
 | `init` | `{passphrase}` (min 10 chars) | `{recovery_key}` (shown once) |
 | `unlock` | `{passphrase}` | `{locked: false}` |
+| `change_passphrase` | `{current, new}` | `{}` |
 | `lock` | none | `{locked: true}` |
 | `put` | `{name, value, type?: "generic", scope?: "synced"\|"local"}` | `{}` |
 | `get` | `{name}` | `{type, scope, value}` |

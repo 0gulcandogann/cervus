@@ -14,6 +14,7 @@ Version: cervus 0.0.5, cervus-vault 0.0.4. Pre-release. Not reviewed. Core role 
 | Sessions | per-shell `CERVUS_SESSION`, dead-shell cleanup, `credential_process`, `aws-profile --install` | `e2e_aws.sh`, `e2e_shell.sh` |
 | Shell | `init-shell zsh|bash [--prompt] [--install]`, Alt+r picker, prompt segment | `e2e_shell.sh` (pty) |
 | Migration | `cervus migrate` (plaintext keys -> vault, role profiles import, verify before delete) | `e2e_migrate.sh` |
+| Key lifecycle | `identity update [--rotate-key]`, `role edit`, `passwd` | Rust unit, `e2e.sh`, `e2e_aws.sh` (fake STS only) |
 | Doctor | `cervus doctor`, including the login service | `e2e_migrate.sh` |
 | Login service | `cervus install-service`, `uninstall-service` (systemd user unit; launchd plist content only) | Go unit, `e2e_migrate.sh` with a fake `systemctl` |
 | Audit | hash-chained log, `cervus audit [verify]`, no secrets logged | Go unit + `e2e_aws.sh` |

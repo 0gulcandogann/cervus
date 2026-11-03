@@ -82,6 +82,10 @@ fn handle(vault: &mut Vault, req: &Request) -> Result<Value, VaultError> {
             )?;
             Ok(json!({ "reencrypted": report.reencrypted, "lost_local": report.lost_local }))
         }
+        "change_passphrase" => {
+            vault.change_passphrase(str_param(&req.params, "current")?, str_param(&req.params, "new")?)?;
+            Ok(json!({}))
+        }
         "lock" => {
             vault.lock();
             Ok(json!({ "locked": true }))

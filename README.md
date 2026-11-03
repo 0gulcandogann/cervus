@@ -10,6 +10,7 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 
 - Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
 - AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
+- Changing things later: `identity update --rotate-key` replaces a key without touching its roles or MFA seed, `role edit` changes only the settings you name, and `passwd` changes the passphrase.
 - Roles: `role add` with `--mfa none|once|always`, `--confirm`, `--duration`. `once` fetches one MFA-backed session token and assumes roles from it; `always` uses a fresh code every time.
 - Per-shell sessions: `CERVUS_SESSION=<id> cervus use <role>`. Two shells can hold two roles.
 - Shell integration: `cervus init-shell zsh --install` (or bash). Each shell gets its own session, `Alt+r` opens a role picker, and an optional prompt segment shows `[role 45m]` (green, red for protected roles, yellow when expired). Sessions of closed shells are cleaned up.

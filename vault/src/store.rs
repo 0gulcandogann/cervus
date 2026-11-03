@@ -229,6 +229,30 @@ impl Vault {
         Ok(())
     }
 
+    /// Re-wraps the device key under a new passphrase. Secrets stay as they are, because they are
+    /// encrypted to the device key, and the current passphrase is required even when unlocked.
+    pub fn change_passphrase(&mut self, current: &str, new: &str) -> Result<(), VaultError> {
+        if !self.is_initialized() {
+            return Err(VaultError::NotInitialized);
+        }
+        if new.chars().count() < MIN_PASSPHRASE_LEN {
+            return Err(VaultError::BadInput(format!(
+                "passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
+            )));
+        }
+        let wrapped = fs::read(self.device_key_path())?;
+        let device_secret = match decrypt_with_passphrase(&wrapped, current) {
+            Ok(p) => p,
+            Err(_) => {
+                std::thread::sleep(Duration::from_secs(1)); // slow down guessing
+                return Err(VaultError::AuthFailed);
+            }
+        };
+        write_atomic(&self.device_key_path(), &encrypt_with_passphrase(&device_secret, new)?)?;
+        self.touch();
+        Ok(())
+    }
+
     fn identity(&self) -> Result<&x25519::Identity, VaultError> {
         if !self.is_initialized() {
             return Err(VaultError::NotInitialized);
@@ -637,6 +661,48 @@ mod tests {
         assert!(matches!(v.recover("not a key", "a brand new passphrase", false), Err(VaultError::BadInput(_))));
         v.unlock(PASS).unwrap(); // the old passphrase still works
         assert_eq!(&v.get("a").unwrap().value[..], b"x");
+    }
+
+    #[test]
+    fn change_passphrase_keeps_every_secret_and_the_recovery_key() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("vault");
+        let mut v = Vault::new(dir.clone(), Duration::from_secs(3600));
+        let recovery = v.init(PASS).unwrap();
+        v.put("shared", "generic", b"s1", Scope::Synced).unwrap();
+        v.put("seed", "mfa_seed", b"s2", Scope::Local).unwrap();
+        v.change_passphrase(PASS, "a brand new passphrase").unwrap();
+        assert_eq!(&v.get("seed").unwrap().value[..], b"s2", "an unlocked vault stays unlocked");
+
+        let mut fresh = Vault::new(dir, Duration::from_secs(3600));
+        assert!(matches!(fresh.unlock(PASS), Err(VaultError::AuthFailed)));
+        fresh.unlock("a brand new passphrase").unwrap();
+        assert_eq!(&fresh.get("shared").unwrap().value[..], b"s1");
+        assert_eq!(&fresh.get("seed").unwrap().value[..], b"s2", "device-only secrets survive");
+
+        let rec = x25519::Identity::from_str(recovery.as_str()).unwrap();
+        let sealed = fs::read(fresh.secret_path(Scope::Synced, "shared")).unwrap();
+        assert!(decrypt_with_identity(&sealed, &rec).is_ok());
+    }
+
+    #[test]
+    fn change_passphrase_with_the_wrong_current_one_changes_nothing() {
+        let (_t, mut v) = vault();
+        v.init(PASS).unwrap();
+        assert!(matches!(v.change_passphrase("wrong passphrase!", "a brand new passphrase"), Err(VaultError::AuthFailed)));
+        assert!(matches!(v.change_passphrase(PASS, "short"), Err(VaultError::BadInput(_))));
+        v.lock();
+        v.unlock(PASS).unwrap();
+    }
+
+    #[test]
+    fn change_passphrase_works_while_locked_and_stays_locked() {
+        let (_t, mut v) = vault();
+        v.init(PASS).unwrap();
+        v.lock();
+        v.change_passphrase(PASS, "a brand new passphrase").unwrap();
+        assert!(v.is_locked());
+        v.unlock("a brand new passphrase").unwrap();
     }
 
     #[test]

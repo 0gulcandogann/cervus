@@ -71,6 +71,18 @@ echo "$PASS" | "$B/cervus" unlock 2>&1 | grep -qi "wrong passphrase" && ok "old 
 echo "$NEW" | "$B/cervus" unlock >/dev/null && ok "new passphrase works" || bad "new passphrase"
 printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover --drop-local >/dev/null 2>&1
 "$B/cervus" secret list | grep -q seed-one && bad "stale local secret not dropped" || ok "--drop-local removes the stale device-only secret"
+# --- changing the passphrase
+NEW2="yet another long passphrase"
+printf 'WRONG-CURRENT-PASS\n%s\n%s\n' "$NEW2" "$NEW2" | "$B/cervus" passwd 2>&1 | grep -qi "wrong passphrase" && ok "passwd refuses a wrong current passphrase" || bad "passwd wrong current"
+printf '%s\nshort\nshort\n' "$NEW" | "$B/cervus" passwd 2>&1 | grep -q "at least 10" && ok "passwd refuses a short passphrase" || bad "passwd short"
+printf '%s\n%s\nno match here\n' "$NEW" "$NEW2" | "$B/cervus" passwd 2>&1 | grep -q "do not match" && ok "passwd refuses mismatched passphrases" || bad "passwd mismatch"
+printf '%s\n%s\n%s\n' "$NEW" "$NEW2" "$NEW2" | "$B/cervus" passwd >/dev/null 2>&1 && ok "passwd succeeds" || bad "passwd"
+"$B/cervus" secret get shared-one 2>&1 | grep -q shared-value && ok "the vault stays usable after passwd" || bad "secret after passwd"
+"$B/cervus" lock >/dev/null
+echo "$NEW" | "$B/cervus" unlock 2>&1 | grep -qi "wrong passphrase" && ok "the old passphrase stops working" || bad "old passphrase after passwd"
+echo "$NEW2" | "$B/cervus" unlock >/dev/null && ok "the new passphrase unlocks" || bad "new passphrase after passwd"
+printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover >/dev/null 2>&1 && ok "the recovery key survives passwd" || bad "recovery after passwd"
+! grep -rqE "$NEW2|WRONG-CURRENT-PASS" "$T/config.json" "$T/d.log" "$T"/audit.log 2>/dev/null && ok "no passphrase in the logs" || bad "passphrase in logs"
 kill "$D3" 2>/dev/null
 
 echo; [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }

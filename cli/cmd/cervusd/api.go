@@ -75,11 +75,13 @@ type handler func(a *app, params json.RawMessage) (any, *apiErr)
 var apiHandlers = map[string]handler{
 	"identity.add":        (*app).identityAdd,
 	"identity.list":       (*app).identityList,
+	"identity.update":     (*app).identityUpdate,
 	"identity.remove":     (*app).identityRemove,
 	"identity.verify_key": (*app).identityVerifyKey,
 	"identity.mfa_import": (*app).identityMFAImport,
 	"role.add":            (*app).roleAdd,
 	"role.list":           (*app).roleList,
+	"role.edit":           (*app).roleEdit,
 	"role.remove":         (*app).roleRemove,
 	"use":                 (*app).use,
 	"credentials":         (*app).credentials,
@@ -441,6 +443,94 @@ func (a *app) identityList(params json.RawMessage) (any, *apiErr) {
 	return map[string]any{"identities": out}, nil
 }
 
+// identityUpdate changes an identity in place, so rotating a key does not mean deleting its roles
+// and MFA seed. A new key is checked with AWS before it replaces the old one.
+func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
+	var p struct {
+		ID              string  `json:"id"`
+		Region          *string `json:"region"`
+		MFASerial       *string `json:"mfa_serial"`
+		Rotate          bool    `json:"rotate"`
+		AccessKeyID     string  `json:"access_key_id"`
+		SecretAccessKey string  `json:"secret_access_key"`
+		Verify          *bool   `json:"verify"`
+	}
+	if e := parse(params, &p); e != nil {
+		return nil, e
+	}
+	if !p.Rotate && p.Region == nil && p.MFASerial == nil {
+		return nil, fe("bad_request", "nothing to change; use --rotate-key, --region or --mfa-serial")
+	}
+	if p.Rotate != (p.AccessKeyID != "" && p.SecretAccessKey != "") {
+		return nil, fe("bad_request", "rotating a key needs both the access key id and the secret")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg, e := a.loadCfg()
+	if e != nil {
+		return nil, e
+	}
+	ident, ok := cfg.Identities[p.ID]
+	if !ok {
+		return nil, fe("not_found", "unknown identity %q", p.ID)
+	}
+	if p.Region != nil {
+		ident.Region = *p.Region
+	}
+	if p.MFASerial != nil {
+		ident.MFASerial = *p.MFASerial
+	}
+	if err := ident.Validate(p.ID); err != nil {
+		return nil, fe("bad_request", "%v", err)
+	}
+	if ident.MFASerial == "" {
+		for n, r := range cfg.Roles {
+			if r.Identity == p.ID && r.MFA != "none" {
+				return nil, fe("bad_request", "role %q needs MFA; change it first with `cervus role edit`", n)
+			}
+		}
+	}
+
+	res := map[string]string{}
+	if p.Rotate {
+		creds := awsapi.Credentials{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey}
+		verify := p.Verify == nil || *p.Verify
+		if verify {
+			arn, account, err := a.stsFor(ident.Region).GetCallerIdentity(creds)
+			if err != nil {
+				return nil, awsErr(err)
+			}
+			res["arn"], res["account"] = arn, account
+		}
+		old, e := a.longTermCreds(p.ID)
+		if e != nil && e.Code != "not_found" {
+			return nil, e
+		}
+		if verify && e == nil {
+			// The old key may already be revoked, so a failed lookup is not an error here.
+			if oldArn, _, err := a.stsFor(ident.Region).GetCallerIdentity(old); err == nil && oldArn != res["arn"] {
+				res["previous_arn"] = oldArn
+			}
+		}
+		blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
+		if e := a.vaultPut("aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
+			return nil, e
+		}
+	}
+	cfg.Identities[p.ID] = ident
+	if err := cfg.Save(a.cfgPath); err != nil {
+		return nil, fe("internal", "%v", err)
+	}
+	delete(a.identTok, p.ID)
+	for n, r := range cfg.Roles {
+		if r.Identity == p.ID {
+			delete(a.roleCache, n)
+		}
+	}
+	return res, nil
+}
+
 // identityVerifyKey tells a caller that already holds a key whether the vault stored the same one,
 // so `cervus migrate` can safely delete the plaintext. It only ever answers yes or no.
 func (a *app) identityVerifyKey(params json.RawMessage) (any, *apiErr) {
@@ -559,6 +649,63 @@ func (a *app) roleAdd(params json.RawMessage) (any, *apiErr) {
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return nil, fe("internal", "%v", err)
 	}
+	return map[string]any{}, nil
+}
+
+// roleEdit changes only the fields it is given. Shells on the role stay on it and get fresh
+// credentials on their next use.
+func (a *app) roleEdit(params json.RawMessage) (any, *apiErr) {
+	var p struct {
+		Name         string  `json:"name"`
+		Identity     *string `json:"identity"`
+		ARN          *string `json:"arn"`
+		Region       *string `json:"region"`
+		MFA          *string `json:"mfa"`
+		Confirm      *bool   `json:"confirm"`
+		DurationSecs *int    `json:"duration_secs"`
+	}
+	if e := parse(params, &p); e != nil {
+		return nil, e
+	}
+	if p.Identity == nil && p.ARN == nil && p.Region == nil && p.MFA == nil && p.Confirm == nil && p.DurationSecs == nil {
+		return nil, fe("bad_request", "nothing to change; see `cervus help`")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg, e := a.loadCfg()
+	if e != nil {
+		return nil, e
+	}
+	r, ok := cfg.Roles[p.Name]
+	if !ok {
+		return nil, fe("not_found", "unknown role %q", p.Name)
+	}
+	if p.Identity != nil {
+		r.Identity = *p.Identity
+	}
+	if p.ARN != nil {
+		r.ARN = *p.ARN
+	}
+	if p.Region != nil {
+		r.Region = *p.Region
+	}
+	if p.MFA != nil {
+		r.MFA = *p.MFA
+	}
+	if p.Confirm != nil {
+		r.Confirm = *p.Confirm
+	}
+	if p.DurationSecs != nil {
+		r.DurationSecs = *p.DurationSecs
+	}
+	if err := r.Validate(p.Name, cfg); err != nil {
+		return nil, fe("bad_request", "%v", err)
+	}
+	cfg.Roles[p.Name] = r
+	if err := cfg.Save(a.cfgPath); err != nil {
+		return nil, fe("internal", "%v", err)
+	}
+	delete(a.roleCache, p.Name)
 	return map[string]any{}, nil
 }
 
