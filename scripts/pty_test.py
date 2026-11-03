@@ -121,6 +121,21 @@ def test_shell(name, argv, setup=()):
     t.send("\x1b[B"); t.send("\x1b[A"); t.send("\x1b[A"); t.send("\r")
     seg = t.expect('Now using role "')
     ok("%s: arrow keys move the selection (wrap-around)" % name) if seg is not None and 'Now using role "beta"' in (seg + t.tail()) else bad("%s: arrows" % name, (seg or "") + t.tail())
+    # a locked vault must not be a dead end: the picker asks for the passphrase and carries on
+    passphrase = os.environ["CERVUS_TEST_PASS"]
+    cervus("lock")
+    mark = len(t.raw)
+    t.send("\x1br"); t.expect("Switch role")
+    t.send("\r")
+    seg = t.expect("Passphrase:")
+    if seg is None: bad("%s: picker asks for the passphrase when locked" % name, t.tail())
+    else:
+        ok("%s: picker asks for the passphrase when locked" % name)
+        t.send(passphrase + "\r")
+        seg = t.expect('Now using role "beta"')
+        ok("%s: unlocking from the picker completes the switch" % name) if seg else bad("%s: unlock from picker" % name, t.tail())
+    ok("%s: the passphrase is not shown on screen" % name) if passphrase not in t.raw[mark:] else bad("%s: passphrase echoed" % name)
+
     return t, sid
 
 def main():

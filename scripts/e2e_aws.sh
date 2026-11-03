@@ -23,7 +23,7 @@ python3 "$HERE/mock_sts.py" "$T/port" "$LOG" & M=$!
 for _ in $(seq 50); do [ -s "$T/port" ] && break; sleep 0.1; done
 PORT=$(cat "$T/port")
 "$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault" --config "$T/config.json" \
-  --sts-endpoint "http://127.0.0.1:$PORT/" --idle-secs 3600 2>"$T/d.log" & D=$!
+  --sts-endpoint "http://127.0.0.1:$PORT/" --idle-secs 3600 --gc-interval 1s 2>"$T/d.log" & D=$!
 sleep 1
 
 printf "$PASS\n$PASS\n" | cv init >/dev/null 2>&1
@@ -39,6 +39,30 @@ check "access key not in plaintext on disk" "! grep -rq SUPERSECRETKEYVALUE $T/v
 check "config.json is mode 600" "[ \"\$(stat -c %a $T/config.json)\" = 600 ]"
 printf "$SEED\n" | cv identity mfa-import work 2>&1 | grep -q "device only" && ok "mfa seed imported (device-only)" || bad "mfa import"
 check "mfa seed stored in local/ only" "ls $T/vault/local | grep -q mfa-seed.work && ! ls $T/vault/secrets | grep -q mfa-seed"
+
+# --- reserved names: key material never leaves through the public secret API
+for name in aws-key.work mfa-seed.work; do
+  OUT=$(cv secret get "$name" 2>&1); RC=$?
+  if [ "$RC" -ne 0 ] && echo "$OUT" | grep -q "managed by Cervus" && ! echo "$OUT" | grep -qE "SUPERSECRETKEYVALUE|AKIATESTKEY|$SEED"; then
+    ok "secret get refuses $name"
+  else
+    bad "secret get refuses $name" # the output is not printed: it may contain the secret
+  fi
+  printf 'evil' | cv secret put "$name" 2>&1 | grep -q "managed by Cervus" && ok "secret put refuses $name" || bad "secret put refuses $name"
+  cv secret rm "$name" 2>&1 | grep -q "managed by Cervus" && ok "secret rm refuses $name" || bad "secret rm refuses $name"
+done
+check "reserved secrets are still stored" "cv secret list | grep -q aws-key.work && cv secret list | grep -q mfa-seed.work"
+printf 'plain-value' | cv secret put note.one
+[ "$(cv secret get note.one)" = "plain-value" ] && ok "ordinary secrets still work" || bad "ordinary secrets"
+
+# --- identity.verify_key answers only yes or no, for a caller that already holds the key
+api() { python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.argv[2].encode()+b"\n"); print(s.makefile().readline())' "$CERVUS_SOCKET" "$1"; }
+vk() { api "{\"id\":1,\"op\":\"identity.verify_key\",\"params\":{\"id\":\"$1\",\"access_key_id\":\"$2\",\"secret_access_key\":\"$3\"}}"; }
+vk work AKIATESTKEY SUPERSECRETKEYVALUE | grep -q '"match":true' && ok "verify_key matches the stored key" || bad "verify_key match"
+vk work AKIATESTKEY WRONGVALUE | grep -q '"match":false' && ok "verify_key rejects a wrong secret" || bad "verify_key wrong secret"
+vk work AKIAOTHER SUPERSECRETKEYVALUE | grep -q '"match":false' && ok "verify_key rejects a wrong key id" || bad "verify_key wrong id"
+vk ghost AKIATESTKEY SUPERSECRETKEYVALUE | grep -q '"code":"not_found"' && ok "verify_key reports an unknown identity" || bad "verify_key unknown identity"
+check "verify_key reply does not contain the stored secret" "! vk work AKIATESTKEY WRONGVALUE | grep -q SUPERSECRETKEYVALUE"
 
 # --- roles
 cv role add dev --identity work --arn arn:aws:iam::123456789012:role/Dev && ok "role add dev (no MFA)" || bad "role add dev"
@@ -83,6 +107,15 @@ check "mfa=once: session token fetched with MFA, role assumed from it" "grep -q 
 cv use stage2 >/dev/null 2>&1 && ok "use stage2 (MFA once, second role)" || bad "use stage2"
 check "mfa=once: session token reused, no new MFA code" "[ \"\$(grep -c '\"action\": \"GetSessionToken\", \"key\": \"AKIATESTKEY\"' $LOG)\" = 1 ]"
 
+# --- a shell that never registered (for example, opened before a daemon restart)
+sleep 60 & OWNER=$!
+CERVUS_SESSION=gc-test CERVUS_SESSION_OWNER=$OWNER cv use dev >/dev/null 2>&1
+CERVUS_SESSION=gc-test cv credential-process 2>&1 | grep -q AccessKeyId && ok "use works before the owner exits" || bad "use with an owner pid"
+kill "$OWNER"; wait "$OWNER" 2>/dev/null; sleep 3
+CERVUS_SESSION=gc-test cv credential-process 2>&1 | grep -q "no role selected" && ok "use registers the shell, so its session is cleaned up" || bad "session cleanup after use"
+CERVUS_SESSION=gc-odd CERVUS_SESSION_OWNER=not-a-number cv use dev >/dev/null 2>&1 && ok "an invalid owner value is ignored" || bad "invalid owner"
+api '{"id":1,"op":"use","params":{"session":"gc-bad","role":"dev","pid":1}}' | grep -q '"code":"bad_request"' && ok "use refuses pid 1" || bad "use pid 1"
+
 # --- lock behaviour
 cv lock >/dev/null
 CERVUS_SESSION=shell-a cv credential-process 2>&1 | grep -q "locked" && ok "lock drops cached credentials (refresh needs unlock)" || bad "lock clears cache"
@@ -91,5 +124,20 @@ CERVUS_SESSION=shell-a cv credential-process | grep -q ASIAROLEDev && ok "after 
 cv role remove stage && ok "role remove" || bad "role remove"
 cv identity remove work 2>&1 | grep -q "still uses" && ok "identity in use cannot be removed" || bad "identity remove guard"
 cv aws-profile | grep -q "credential_process = .*cervus credential-process" && ok "aws-profile snippet" || bad "aws-profile"
+
+# --- audit log
+echo "$PASS" | cv unlock >/dev/null 2>&1
+AUD=$(cv audit -n 0)
+check "audit log records identity add, role switches and credential issuance" "echo \"\$AUD\" | grep -q 'identity.add.*id=work' && echo \"\$AUD\" | grep -q 'use .*role=prod' && echo \"\$AUD\" | grep -q 'credentials.issued.*role=dev'"
+check "audit log records failures with an error code" "echo \"\$AUD\" | grep -q 'result=failed' && echo \"\$AUD\" | grep -q 'error=mfa_code_reused'"
+check "audit log records refused access to reserved secrets" "echo \"\$AUD\" | grep -q 'secret.get .*error=denied name=aws-key.work'"
+check "audit log records verify_key by identity" "echo \"\$AUD\" | grep -q 'identity.verify_key .*id=work'"
+check "audit log never contains secrets, TOTP codes or the passphrase" "! grep -qE 'SUPERSECRETKEYVALUE|correct horse|$SEED|SECRET-ASIA' $T/audit.log"
+check "audit log is mode 600" "[ \"\$(stat -c %a $T/audit.log)\" = 600 ]"
+cv audit verify | grep -q intact && ok "audit chain verifies" || bad "audit verify"
+cp "$T/audit.log" "$T/audit.bak"
+sed -i '0,/"role":"dev"/s//"role":"evil"/' "$T/audit.log"
+cv audit verify 2>&1 | grep -q "chain breaks at line" && ok "tampering with an entry is detected" || bad "tamper detection"
+cp "$T/audit.bak" "$T/audit.log"
 
 echo; [ "$FAILS" = 0 ] && echo "all AWS checks passed" || { echo "$FAILS check(s) failed"; echo "--- daemon log"; tail -5 "$T/d.log"; exit 1; }

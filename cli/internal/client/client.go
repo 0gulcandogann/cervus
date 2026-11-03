@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -35,16 +37,57 @@ type response struct {
 	Error *RemoteError    `json:"error,omitempty"`
 }
 
-// SocketPath returns the daemon socket location.
+// runUserBase is the parent of the per-user runtime directories on Linux. Tests replace it.
+var runUserBase = "/run/user"
+
+// SocketPath returns the socket this process should talk to.
 func SocketPath() string {
 	if p := os.Getenv("CERVUS_SOCKET"); p != "" {
 		return p
 	}
+	return DefaultSocketPath()
+}
+
+// DefaultSocketPath returns the socket of a daemon that was not given a custom one, such as the
+// login service.
+func DefaultSocketPath() string {
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
 		return filepath.Join(dir, "cervus", "cervus.sock")
 	}
+	// Some logins (SSH without a session manager) lack XDG_RUNTIME_DIR, but the login service
+	// still listens in the per-user runtime directory.
+	if p, ok := runUserSocket(); ok {
+		return p
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cervus", "cervus.sock")
+}
+
+// runUserSocket finds the per-user socket, but only if nobody else could have planted it: passphrases
+// go through this socket, and the client has no other way to tell who is listening.
+func runUserSocket() (string, bool) {
+	uid := os.Getuid()
+	userDir := filepath.Join(runUserBase, strconv.Itoa(uid))
+	dir := filepath.Join(userDir, "cervus")
+	if !privateDir(userDir, uid) || !privateDir(dir, uid) {
+		return "", false
+	}
+	path := filepath.Join(dir, "cervus.sock")
+	st, err := os.Lstat(path)
+	if err != nil || st.Mode()&os.ModeSocket == 0 || !ownedBy(st, uid) {
+		return "", false
+	}
+	return path, true
+}
+
+func privateDir(path string, uid int) bool {
+	st, err := os.Lstat(path)
+	return err == nil && st.IsDir() && st.Mode().Perm()&0o022 == 0 && ownedBy(st, uid)
+}
+
+func ownedBy(st os.FileInfo, uid int) bool {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == uid
 }
 
 // Call opens a connection, sends one request and decodes the reply into out (if non-nil).

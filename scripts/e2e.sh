@@ -12,7 +12,7 @@ bad() { echo "FAIL: $1"; FAILS=$((FAILS+1)); }
 cleanup() { kill "${D:-}" 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
 
-start() { "$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault" --idle-secs "$1" 2>>"$T/d.log" & D=$!; sleep 1; }
+start() { "$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault" --config "$T/config.json" --idle-secs "$1" 2>>"$T/d.log" & D=$!; sleep 1; }
 
 start 3600
 "$B/cervus" status | grep -q "not initialized" && ok "status before init" || bad "status before init"
@@ -50,5 +50,27 @@ kill "$D"; sleep 0.5
 start 2
 echo "$PASS" | "$B/cervus" unlock >/dev/null; sleep 3
 "$B/cervus" secret get aws-work 2>&1 | grep -qi locked && ok "idle timeout auto-locks" || bad "idle timeout"
+
+kill "$D" 2>/dev/null; sleep 0.5
+
+# --- recovery with the recovery key (fresh vault)
+"$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault2" --config "$T/config.json" 2>>"$T/d.log" & D3=$!
+sleep 1
+printf "$PASS\n$PASS\n" | "$B/cervus" init >"$T/init2.out" 2>&1
+RK=$(grep -o 'AGE-SECRET-KEY-[A-Z0-9]*' "$T/init2.out")
+printf 'shared-value' | "$B/cervus" secret put shared-one >/dev/null
+printf 'seed-value' | "$B/cervus" secret put --local seed-one >/dev/null
+"$B/cervus" lock >/dev/null
+NEW="a completely new passphrase"
+printf "WRONG-KEY\n$NEW\n$NEW\n" | "$B/cervus" recover 2>&1 | grep -qi "not a valid recovery key" && ok "invalid recovery key rejected" || bad "invalid recovery key"
+printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover >"$T/rec.out" 2>&1 && grep -q "1 secret(s) re-encrypted" "$T/rec.out" && ok "recover re-encrypts synced secrets" || bad "recover"
+grep -q "seed-one" "$T/rec.out" && ok "recover reports the device-only secret it could not restore" || bad "recover lost-local report"
+"$B/cervus" secret get shared-one 2>&1 | grep -q shared-value && ok "synced secret readable after recovery" || bad "secret after recovery"
+"$B/cervus" lock >/dev/null
+echo "$PASS" | "$B/cervus" unlock 2>&1 | grep -qi "wrong passphrase" && ok "old passphrase no longer works" || bad "old passphrase"
+echo "$NEW" | "$B/cervus" unlock >/dev/null && ok "new passphrase works" || bad "new passphrase"
+printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover --drop-local >/dev/null 2>&1
+"$B/cervus" secret list | grep -q seed-one && bad "stale local secret not dropped" || ok "--drop-local removes the stale device-only secret"
+kill "$D3" 2>/dev/null
 
 echo; [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }

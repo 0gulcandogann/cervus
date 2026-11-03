@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,7 @@ type app struct {
 	cfgPath     string
 	stsEndpoint string
 	now         func() time.Time
+	audit       *auditLog
 
 	mu        sync.Mutex
 	sessions  map[string]string
@@ -74,6 +76,7 @@ var apiHandlers = map[string]handler{
 	"identity.add":        (*app).identityAdd,
 	"identity.list":       (*app).identityList,
 	"identity.remove":     (*app).identityRemove,
+	"identity.verify_key": (*app).identityVerifyKey,
 	"identity.mfa_import": (*app).identityMFAImport,
 	"role.add":            (*app).roleAdd,
 	"role.list":           (*app).roleList,
@@ -82,6 +85,40 @@ var apiHandlers = map[string]handler{
 	"credentials":         (*app).credentials,
 	"whoami":              (*app).whoami,
 	"session.register":    (*app).sessionRegister,
+	"audit.tail":          (*app).auditTail,
+	"audit.verify":        (*app).auditVerify,
+}
+
+func (a *app) auditTail(params json.RawMessage) (any, *apiErr) {
+	var p struct {
+		N int `json:"n"`
+	}
+	if e := parse(params, &p); e != nil {
+		return nil, e
+	}
+	if a.audit == nil {
+		return map[string]any{"lines": []string{}}, nil
+	}
+	list, err := a.audit.Tail(p.N)
+	if err != nil {
+		return nil, fe("internal", "%v", err)
+	}
+	lines := make([]string, 0, len(list))
+	for _, e := range list {
+		lines = append(lines, formatEntry(e))
+	}
+	return map[string]any{"lines": lines}, nil
+}
+
+func (a *app) auditVerify(params json.RawMessage) (any, *apiErr) {
+	if a.audit == nil {
+		return map[string]any{"entries": 0, "bad_line": 0}, nil
+	}
+	n, bad, err := a.audit.Verify()
+	if err != nil {
+		return nil, fe("internal", "%v", err)
+	}
+	return map[string]any{"entries": n, "bad_line": bad}, nil
 }
 
 func pidAlive(pid int) bool {
@@ -309,6 +346,10 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 		return awsapi.Credentials{}, awsErr(err)
 	}
 	a.roleCache[roleName] = creds
+	a.audit.Append("credentials.issued", map[string]any{
+		"role": roleName, "identity": role.Identity, "mfa": role.MFA,
+		"expires_at": creds.Expiration.UTC().Format(time.RFC3339),
+	})
 	return creds, nil
 }
 
@@ -398,6 +439,26 @@ func (a *app) identityList(params json.RawMessage) (any, *apiErr) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return map[string]any{"identities": out}, nil
+}
+
+// identityVerifyKey tells a caller that already holds a key whether the vault stored the same one,
+// so `cervus migrate` can safely delete the plaintext. It only ever answers yes or no.
+func (a *app) identityVerifyKey(params json.RawMessage) (any, *apiErr) {
+	var p struct {
+		ID              string `json:"id"`
+		AccessKeyID     string `json:"access_key_id"`
+		SecretAccessKey string `json:"secret_access_key"`
+	}
+	if e := parse(params, &p); e != nil {
+		return nil, e
+	}
+	stored, e := a.longTermCreds(p.ID)
+	if e != nil {
+		return nil, e
+	}
+	idOK := subtle.ConstantTimeCompare([]byte(stored.AccessKeyID), []byte(p.AccessKeyID))
+	secretOK := subtle.ConstantTimeCompare([]byte(stored.SecretAccessKey), []byte(p.SecretAccessKey))
+	return map[string]any{"match": idOK&secretOK == 1}, nil
 }
 
 func (a *app) identityMFAImport(params json.RawMessage) (any, *apiErr) {
@@ -552,12 +613,16 @@ func (a *app) use(params json.RawMessage) (any, *apiErr) {
 		Session   string `json:"session"`
 		Role      string `json:"role"`
 		Confirmed bool   `json:"confirmed"`
+		PID       int    `json:"pid"` // optional: the shell, in case it never registered
 	}
 	if e := parse(params, &p); e != nil {
 		return nil, e
 	}
 	if !sessionRe.MatchString(p.Session) {
 		return nil, fe("bad_request", "invalid session id")
+	}
+	if p.PID != 0 && p.PID <= 1 {
+		return nil, fe("bad_request", "invalid pid")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -577,6 +642,9 @@ func (a *app) use(params json.RawMessage) (any, *apiErr) {
 		return nil, e
 	}
 	a.sessions[p.Session] = p.Role
+	if p.PID != 0 {
+		a.pids[p.Session] = p.PID
+	}
 	return map[string]any{"role": p.Role, "expires_at": creds.Expiration.UTC().Format(time.RFC3339)}, nil
 }
 

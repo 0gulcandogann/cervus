@@ -12,6 +12,7 @@ test: build
 	cd cli && go vet ./... && go test ./...
 	BIN=$(BIN) bash ./scripts/e2e.sh
 	BIN=$(BIN) bash ./scripts/e2e_aws.sh
+	BIN=$(BIN) bash ./scripts/e2e_migrate.sh
 	BIN=$(BIN) ZSH=$$(command -v zsh) bash ./scripts/e2e_shell.sh
 
 clean:

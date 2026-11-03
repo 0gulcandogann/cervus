@@ -12,13 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"cervus/internal/client"
 )
 
-const version = "0.0.4"
+const version = "0.0.5"
 
 // Must match the vault's minimum; the vault enforces it too.
 const minPassphraseLen = 10
@@ -48,6 +49,8 @@ func main() {
 		if err = client.Call("lock", nil, nil); err == nil {
 			fmt.Println("vault locked")
 		}
+	case "recover":
+		err = cmdRecover(args)
 	case "secret":
 		err = cmdSecret(args)
 	case "identity":
@@ -70,8 +73,16 @@ func main() {
 		err = cmdCredentialProcess()
 	case "aws-profile":
 		err = cmdAWSProfile(args)
+	case "audit":
+		err = cmdAudit(args)
 	case "doctor":
-		err = errors.New("\"doctor\" is not implemented yet")
+		err = cmdDoctor()
+	case "migrate":
+		err = cmdMigrate(args)
+	case "install-service":
+		err = cmdInstallService(args)
+	case "uninstall-service":
+		err = cmdUninstallService(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
 		usage()
@@ -165,6 +176,84 @@ func confirmRecoveryKey(key string) {
 		fmt.Println("That does not match. Check the key you saved.")
 	}
 	fmt.Println("\nNot confirmed. The key is shown only once: copy it from above before closing this window.")
+}
+
+func cmdRecover(args []string) error {
+	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
+	drop := fs.Bool("drop-local", false, "delete device-only secrets that cannot be recovered")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	key, err := readSecret("Recovery key (AGE-SECRET-KEY-...): ")
+	if err != nil {
+		return err
+	}
+	pass, err := readSecret("New passphrase (min 10 characters): ")
+	if err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(pass) < minPassphraseLen {
+		return fmt.Errorf("passphrase must be at least %d characters", minPassphraseLen)
+	}
+	again, err := readSecret("Repeat passphrase: ")
+	if err != nil {
+		return err
+	}
+	if pass != again {
+		return errors.New("passphrases do not match")
+	}
+	var out struct {
+		Reencrypted int      `json:"reencrypted"`
+		LostLocal   []string `json:"lost_local"`
+	}
+	if err := client.Call("recover", map[string]any{"recovery_key": key, "passphrase": pass, "drop_local": *drop}, &out); err != nil {
+		return err
+	}
+	fmt.Printf("Recovered. %d secret(s) re-encrypted for this device; the vault is unlocked with the new passphrase.\n", out.Reencrypted)
+	if len(out.LostLocal) > 0 {
+		fmt.Println("\nThese device-only secrets could not be recovered (they were encrypted to the old device key):")
+		for _, n := range out.LostLocal {
+			fmt.Println("  " + n)
+		}
+		fmt.Println("MFA seeds: set them up again with `cervus identity mfa-import <name>`.")
+		if !*drop {
+			fmt.Println("Run `cervus recover --drop-local` to remove the stale files.")
+		}
+	}
+	fmt.Println("\nYour recovery key is unchanged and still valid.")
+	return nil
+}
+
+func cmdAudit(args []string) error {
+	if len(args) > 0 && args[0] == "verify" {
+		var out struct {
+			Entries int `json:"entries"`
+			BadLine int `json:"bad_line"`
+		}
+		if err := client.Call("audit.verify", nil, &out); err != nil {
+			return err
+		}
+		if out.BadLine != 0 {
+			return fmt.Errorf("the audit log was modified: the chain breaks at line %d of %d", out.BadLine, out.Entries)
+		}
+		fmt.Printf("audit log intact (%d entries)\n", out.Entries)
+		return nil
+	}
+	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
+	n := fs.Int("n", 20, "number of recent entries (0 = all)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	var out struct {
+		Lines []string `json:"lines"`
+	}
+	if err := client.Call("audit.tail", map[string]int{"n": *n}, &out); err != nil {
+		return err
+	}
+	for _, l := range out.Lines {
+		fmt.Println(l)
+	}
+	return nil
 }
 
 func cmdUnlock() error {
@@ -408,10 +497,39 @@ type useResult struct {
 
 // switchRole switches this shell's session to a role. If the role is protected and yes is false,
 // confirm decides whether to proceed.
-func switchRole(role string, yes bool, confirm func() (bool, error)) (useResult, error) {
+// sendUnlock is a variable so tests can run withUnlock without a daemon.
+var sendUnlock = func(passphrase string) error {
+	return client.Call("unlock", map[string]string{"passphrase": passphrase}, nil)
+}
+
+// withUnlock runs call; if the vault is locked it asks once for the passphrase, unlocks and
+// retries. A nil ask means there is no terminal to ask on, so the locked error stands.
+func withUnlock(call func() error, ask func() (string, error)) error {
+	err := call()
+	var re *client.RemoteError
+	if ask == nil || !errors.As(err, &re) || re.Code != "locked" {
+		return err
+	}
+	passphrase, err := ask()
+	if err != nil {
+		return err
+	}
+	if err := sendUnlock(passphrase); err != nil {
+		return err
+	}
+	return call()
+}
+
+func switchRole(role string, yes bool, confirm func() (bool, error), ask func() (string, error)) (useResult, error) {
 	call := func(confirmed bool) (useResult, error) {
 		var out useResult
-		err := client.Call("use", map[string]any{"session": sessionID(), "role": role, "confirmed": confirmed}, &out)
+		err := withUnlock(func() error {
+			params := map[string]any{"session": sessionID(), "role": role, "confirmed": confirmed}
+			if pid, err := strconv.Atoi(os.Getenv("CERVUS_SESSION_OWNER")); err == nil && pid > 1 {
+				params["pid"] = pid // re-registers a shell the daemon has forgotten
+			}
+			return client.Call("use", params, &out)
+		}, ask)
 		return out, err
 	}
 	out, err := call(yes)
@@ -448,7 +566,11 @@ func cmdUse(args []string) error {
 		a := strings.ToLower(strings.TrimSpace(line))
 		return a == "y" || a == "yes", nil
 	}
-	out, err := switchRole(role, *yes, confirm)
+	var ask func() (string, error)
+	if isTTY(os.Stdin) {
+		ask = func() (string, error) { return readSecret("Vault is locked. Passphrase: ") }
+	}
+	out, err := switchRole(role, *yes, confirm, ask)
 	if err != nil {
 		return err
 	}
@@ -499,11 +621,7 @@ func cmdAWSProfile(args []string) error {
 		fmt.Println("\nAdd this to ~/.aws/config (or run with --install), then: export AWS_PROFILE=cervus")
 		return nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(home, ".aws", "config")
+	_, path := awsPaths()
 	existing, _ := os.ReadFile(path)
 	if strings.Contains(string(existing), "[profile cervus]") {
 		return errors.New("[profile cervus] already exists in " + path)
@@ -604,6 +722,7 @@ func usage() {
 Vault:
   init                       Create the vault (passphrase + recovery key)
   unlock | lock | status     Unlock, lock or inspect the vault
+  recover [--drop-local]     Lost your passphrase? Reset it with the recovery key
   secret put [--local] <n>   Store a secret (value from stdin)
   secret get [-n] <n>        Print a secret to stdout
   secret list [prefix]       List secret names
@@ -620,8 +739,14 @@ AWS:
   init-shell <zsh|bash> [--prompt] [--install]
                              Shell integration: per-shell session, Alt+r, prompt segment
   whoami                     Show the current role and time left
+  audit [-n N] | audit verify  Show recent security events; check the log was not tampered with
+  migrate [--dry-run] [--yes]  Move plaintext ~/.aws/credentials keys into the vault, import role profiles
+  doctor                     Check permissions, plaintext leftovers, profile and shell setup
   aws-profile [--install]    Print or install the AWS CLI profile (credential_process)
   credential-process         Used by the AWS CLI; prints credentials as JSON
+
+  install-service            Start cervusd at login (systemd user unit or launchd agent)
+  uninstall-service          Remove the service; the vault, config and audit log stay
 
   version                    Print version
 `)

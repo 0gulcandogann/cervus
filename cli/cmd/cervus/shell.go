@@ -224,13 +224,42 @@ loop:
 		fmt.Fprint(tty, string(b)+"\r\n")
 		return b == 'y' || b == 'Y', nil
 	}
-	res, err := switchRole(items[choice].Name, false, confirm)
+	ask := func() (string, error) {
+		fmt.Fprint(tty, "Vault is locked. Passphrase: ")
+		passphrase, err := readHiddenLine(in)
+		fmt.Fprint(tty, "\r\n")
+		return passphrase, err
+	}
+	res, err := switchRole(items[choice].Name, false, confirm, ask)
 	if err != nil {
 		fmt.Fprintf(tty, "error: %v\r\n", err)
 		return nil
 	}
 	fmt.Fprintf(tty, "Now using role %q (valid until %s)\r\n", res.Role, res.ExpiresAt)
 	return nil
+}
+
+// readHiddenLine reads a line from a terminal in raw mode, where echo is already off.
+func readHiddenLine(r io.ByteReader) (string, error) {
+	var line []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		switch b {
+		case '\r', '\n':
+			return string(line), nil
+		case 3: // Ctrl-C
+			return "", errors.New("cancelled")
+		case 127, 8: // Backspace
+			if len(line) > 0 {
+				line = line[:len(line)-1]
+			}
+		default:
+			line = append(line, b)
+		}
+	}
 }
 
 // rawMode puts the terminal in single-key mode using stty and returns a restore function.

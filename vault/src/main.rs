@@ -63,6 +63,7 @@ fn handle(vault: &mut Vault, req: &Request) -> Result<Value, VaultError> {
             "locked": vault.is_locked(),
             "version": env!("CARGO_PKG_VERSION"),
             "idle_timeout_secs": vault.idle_timeout_secs(),
+            "dir": vault.dir().to_string_lossy(),
         })),
         "init" => {
             let recovery = vault.init(str_param(&req.params, "passphrase")?)?;
@@ -71,6 +72,15 @@ fn handle(vault: &mut Vault, req: &Request) -> Result<Value, VaultError> {
         "unlock" => {
             vault.unlock(str_param(&req.params, "passphrase")?)?;
             Ok(json!({ "locked": false }))
+        }
+        "recover" => {
+            let drop_local = req.params.get("drop_local").and_then(Value::as_bool).unwrap_or(false);
+            let report = vault.recover(
+                str_param(&req.params, "recovery_key")?,
+                str_param(&req.params, "passphrase")?,
+                drop_local,
+            )?;
+            Ok(json!({ "reencrypted": report.reencrypted, "lost_local": report.lost_local }))
         }
         "lock" => {
             vault.lock();

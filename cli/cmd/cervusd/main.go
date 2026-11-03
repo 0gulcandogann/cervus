@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ var publicToVault = map[string]string{
 	"status":        "status",
 	"init":          "init",
 	"unlock":        "unlock",
+	"recover":       "recover",
 	"lock":          "lock",
 	"secret.put":    "put",
 	"secret.get":    "get",
@@ -57,6 +59,7 @@ func main() {
 	vaultDir := flag.String("vault-dir", "", "vault directory (default: ~/.cervus/vault)")
 	idle := flag.Int("idle-secs", 0, "auto-lock after this many idle seconds (default: 14400)")
 	cfgPath := flag.String("config", config.Path(), "config file path")
+	auditPath := flag.String("audit-log", "", "audit log path (default: audit.log next to the config file)")
 	stsEndpoint := flag.String("sts-endpoint", "", "override the AWS STS endpoint (testing only)")
 	gcEvery := flag.Duration("gc-interval", 30*time.Second, "how often to forget sessions of exited shells")
 	flag.Parse()
@@ -75,6 +78,14 @@ func main() {
 	vault := vaultproc.NewSupervisor(bin, env)
 	defer vault.Close()
 	app := newApp(vault, *cfgPath, *stsEndpoint)
+	if *auditPath == "" {
+		*auditPath = filepath.Join(filepath.Dir(*cfgPath), "audit.log")
+	}
+	if al, err := openAudit(*auditPath); err != nil {
+		log.Printf("warning: audit log disabled: %v", err)
+	} else {
+		app.audit = al
+	}
 	go func() {
 		for range time.Tick(*gcEvery) {
 			app.gcSessions()
@@ -176,6 +187,14 @@ func serve(conn net.Conn, app *app) {
 
 func handle(line []byte, app *app) outResponse {
 	var req inRequest
+	resp := handleRequest(line, app, &req)
+	app.audit.record(req.Op, req.Params, resp)
+	return resp
+}
+
+func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
+	var req inRequest
+	defer func() { *reqOut = req }()
 	if err := json.Unmarshal(line, &req); err != nil {
 		return fail(0, "bad_request", "invalid JSON")
 	}
@@ -190,14 +209,18 @@ func handle(line []byte, app *app) outResponse {
 		}
 		return outResponse{ID: req.ID, OK: true, Data: b}
 	}
-	if req.Op == "lock" {
+	if req.Op == "lock" || req.Op == "recover" {
 		app.clearCaches()
 	}
 	vop, ok := publicToVault[req.Op]
 	if !ok {
 		return fail(req.ID, "unknown_op", fmt.Sprintf("unknown op %q", req.Op))
 	}
-	data, rerr, err := app.vault.Call(vop, req.Params)
+	params, gerr := guardSecretParams(req.Op, req.Params)
+	if gerr != nil {
+		return outResponse{ID: req.ID, Error: gerr}
+	}
+	data, rerr, err := app.vault.Call(vop, params)
 	switch {
 	case errors.Is(err, vaultproc.ErrUnavailable):
 		return fail(req.ID, "internal", "vault process crashed and was reset; it is locked, try again")
@@ -207,6 +230,41 @@ func handle(line []byte, app *app) outResponse {
 		return outResponse{ID: req.ID, Error: rerr}
 	}
 	return outResponse{ID: req.ID, OK: true, Data: data}
+}
+
+// reservedSecretPrefixes name secrets that only the daemon may touch: long-term access keys and
+// MFA seeds. Handlers reach them through vaultCall; the public secret.* API must not.
+var reservedSecretPrefixes = []string{"aws-key.", "mfa-seed."}
+
+// guardSecretParams refuses public secret operations on reserved names. It returns the params to
+// forward, re-encoded from what it checked, so the vault cannot read a different "name" than the
+// one judged here (duplicate keys, or Go's case-insensitive struct field matching).
+func guardSecretParams(op string, raw json.RawMessage) (json.RawMessage, *vaultproc.RemoteError) {
+	switch op {
+	case "secret.get", "secret.put", "secret.delete":
+	default:
+		return raw, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, &vaultproc.RemoteError{Code: "bad_request", Message: "invalid parameters"}
+	}
+	var name string
+	if v, ok := fields["name"]; ok {
+		_ = json.Unmarshal(v, &name) // a non-string name is rejected by the vault
+	}
+	lower := strings.ToLower(name) // case-insensitive file systems open the same file
+	for _, prefix := range reservedSecretPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return nil, &vaultproc.RemoteError{Code: "denied", Message: fmt.Sprintf(
+				"secret %q is managed by Cervus and cannot be read or changed directly; use `cervus identity`", name)}
+		}
+	}
+	checked, err := json.Marshal(fields)
+	if err != nil {
+		return nil, &vaultproc.RemoteError{Code: "internal", Message: err.Error()}
+	}
+	return checked, nil
 }
 
 func fail(id uint64, code, msg string) outResponse {

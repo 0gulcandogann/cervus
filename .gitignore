@@ -2,3 +2,6 @@ vault/target/
 bin/
 *.log
 .DS_Store
+.local/
+.superpowers/
+CLAUDE.local.md

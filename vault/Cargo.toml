@@ -1,6 +1,6 @@
 [package]
 name = "cervus-vault"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2021"
 rust-version = "1.74"
 description = "Cervus secret vault: age-encrypted secrets, zeroized in-memory keys, spoken to over stdio by cervusd"

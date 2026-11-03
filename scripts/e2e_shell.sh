@@ -20,4 +20,4 @@ printf "$PASS\n$PASS\n" | cv init >/dev/null 2>&1
 printf 'AKIATESTKEY\nSUPERSECRET\n' | cv identity add work >/dev/null 2>&1
 for r in alpha beta; do cv role add $r --identity work --arn arn:aws:iam::123456789012:role/$r >/dev/null; done
 cv role add gamma --identity work --arn arn:aws:iam::123456789012:role/gamma --confirm >/dev/null
-python3 "$HERE/pty_test.py"
+CERVUS_TEST_PASS="$PASS" python3 "$HERE/pty_test.py"
