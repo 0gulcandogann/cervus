@@ -118,14 +118,12 @@ Run `cervus help` for every command. After upgrading, restart `cervusd`: an olde
 Release archives are available for `linux-amd64`, `linux-arm64`, `darwin-arm64` and `darwin-amd64`. Keep the three programs in one folder:
 
 ```sh
-V=0.0.6 P=linux-amd64
+V=0.0.7 P=linux-amd64
 curl -LO "https://github.com/0gulcandogann/cervus/releases/download/v$V/cervus-$V-$P.tar.gz"
 gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # optional: proves GitHub Actions built it from this repo
 tar -xzf "cervus-$V-$P.tar.gz"
 export PATH="$PWD/cervus-$V-$P:$PATH"
 ```
-
-**v0.0.6 is older than this README.** Several vaults, `cervus` setup, `keybinding`, `keychain` and the `user:` entries are only in the source for now.
 
 Linux builds need glibc 2.34 or newer. Only the Linux amd64 build has been run. The macOS builds have never been run and are not notarized.
 
