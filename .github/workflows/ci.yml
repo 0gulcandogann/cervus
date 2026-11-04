@@ -1,12 +1,24 @@
 name: CI
 
+# Changes that cannot affect the build do not need a build.
 on:
   push:
     branches: [main]
+    paths-ignore: &docs
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
+    paths-ignore: *docs
 
 permissions:
   contents: read
+
+# A newer push replaces a run still going on the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux:
