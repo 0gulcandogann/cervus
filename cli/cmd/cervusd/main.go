@@ -70,15 +70,23 @@ func main() {
 		log.Fatal(err)
 	}
 	var env []string
-	if *vaultDir != "" {
-		env = append(env, "CERVUS_VAULT_DIR="+*vaultDir)
+	defaultDir := *vaultDir
+	if defaultDir == "" {
+		defaultDir = os.Getenv("CERVUS_VAULT_DIR")
+	}
+	if defaultDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defaultDir = filepath.Join(home, ".cervus", "vault")
 	}
 	if *idle > 0 {
 		env = append(env, "CERVUS_IDLE_SECS="+strconv.Itoa(*idle))
 	}
-	vault := vaultproc.NewSupervisor(bin, env)
-	defer vault.Close()
-	app := newApp(vault, *cfgPath, *stsEndpoint)
+	vaults := newVaultSet(bin, env, defaultDir)
+	defer vaults.close()
+	app := newApp(vaults, *cfgPath, *stsEndpoint)
 	if *auditPath == "" {
 		*auditPath = filepath.Join(filepath.Dir(*cfgPath), "audit.log")
 	}
@@ -104,7 +112,7 @@ func main() {
 	go func() {
 		<-sig
 		ln.Close()
-		vault.Close()
+		vaults.close()
 		os.Remove(*socket)
 		os.Exit(0)
 	}()
@@ -224,14 +232,33 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 	if gerr != nil {
 		return outResponse{ID: req.ID, Error: gerr}
 	}
-	data, rerr, err := app.vault.Call(vop, params)
+	vaultName, verr := vaultParam(params)
+	if verr != nil {
+		return outResponse{ID: req.ID, Error: verr}
+	}
+	if req.Op == "lock" && vaultName == "" { // no vault named: lock them all
+		for _, sup := range app.vaults.running() {
+			_, _, _ = sup.Call(vop, params)
+		}
+		return outResponse{ID: req.ID, OK: true, Data: json.RawMessage(`{"locked":true}`)}
+	}
+	sup, name, verr := app.vaults.get(vaultName)
+	if verr != nil {
+		return outResponse{ID: req.ID, Error: verr}
+	}
+	if req.Op == "init" {
+		if err := app.vaults.prepare(name); err != nil {
+			return fail(req.ID, "internal", err.Error())
+		}
+	}
+	data, rerr, err := sup.Call(vop, params)
 	switch {
 	case errors.Is(err, vaultproc.ErrUnavailable):
 		return fail(req.ID, "internal", "vault process crashed and was reset; it is locked, try again")
 	case err != nil:
 		return fail(req.ID, "internal", err.Error())
 	case rerr != nil:
-		return outResponse{ID: req.ID, Error: rerr}
+		return outResponse{ID: req.ID, Error: lockedMessage(rerr, name)}
 	}
 	return outResponse{ID: req.ID, OK: true, Data: data}
 }

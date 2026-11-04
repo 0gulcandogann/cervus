@@ -14,6 +14,7 @@ import (
 type Identity struct {
 	Region    string `json:"region,omitempty"`
 	MFASerial string `json:"mfa_serial,omitempty"`
+	Vault     string `json:"vault,omitempty"` // empty: the default vault
 }
 
 type Role struct {

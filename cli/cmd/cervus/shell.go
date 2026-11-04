@@ -99,6 +99,7 @@ func cmdPrompt(args []string) error {
 type roleItem struct {
 	Name      string
 	Identity  string
+	Vault     string
 	MFA       string
 	Protected bool
 }
@@ -110,24 +111,45 @@ func cmdPick() error {
 			Identity string `json:"identity"`
 			MFA      string `json:"mfa"`
 			Confirm  bool   `json:"confirm"`
+			Vault    string `json:"vault"`
 		} `json:"roles"`
 	}
 	if err := client.Call("role.list", nil, &list); err != nil {
 		return err
 	}
-	if len(list.Roles) == 0 {
-		return errors.New("no roles yet; add one with `cervus role add`")
+	var users struct {
+		Identities []struct {
+			Name      string `json:"name"`
+			MFASerial string `json:"mfa_serial"`
+			Vault     string `json:"vault"`
+		} `json:"identities"`
+	}
+	if err := client.Call("identity.list", nil, &users); err != nil {
+		return err
+	}
+	if len(list.Roles) == 0 && len(users.Identities) == 0 {
+		return errors.New("nothing to switch to yet; add a user with `cervus identity add`")
 	}
 	var cur struct {
 		Role string `json:"role"`
 	}
 	_ = client.Call("whoami", map[string]string{"session": sessionID()}, &cur)
 
-	items := make([]roleItem, len(list.Roles))
+	// Roles first, then each user on its own, so every vault is reachable from one list.
+	var items []roleItem
+	for _, r := range list.Roles {
+		items = append(items, roleItem{r.Name, r.Identity, r.Vault, r.MFA, r.Confirm})
+	}
+	for _, u := range users.Identities {
+		mfa := "none"
+		if u.MFASerial != "" {
+			mfa = "once"
+		}
+		items = append(items, roleItem{"user:" + u.Name, u.Name, u.Vault, mfa, false})
+	}
 	selected := 0
-	for i, r := range list.Roles {
-		items[i] = roleItem{r.Name, r.Identity, r.MFA, r.Confirm}
-		if r.Name == cur.Role {
+	for i, it := range items {
+		if it.Name == cur.Role {
 			selected = i
 		}
 	}
@@ -171,7 +193,7 @@ func cmdPick() error {
 			if it.Protected {
 				flags += ", protected"
 			}
-			line := fmt.Sprintf("%s%-16s %-12s mfa=%s", mark, it.Name, it.Identity, flags)
+			line := fmt.Sprintf("%s%-20s %-12s %-12s mfa=%s", mark, it.Name, it.Identity, it.Vault, flags)
 			if i == selected {
 				line = "\x1b[7m> " + line[2:] + "\x1b[0m"
 			} else {
@@ -232,8 +254,8 @@ loop:
 		fmt.Fprint(tty, string(b)+"\r\n")
 		return b == 'y' || b == 'Y', nil
 	}
-	ask := func() (string, error) {
-		fmt.Fprint(tty, "Vault is locked. Passphrase: ")
+	ask := func(vault string) (string, error) {
+		fmt.Fprint(tty, unlockPrompt(vault))
 		passphrase, err := readHiddenLine(in)
 		fmt.Fprint(tty, "\r\n")
 		return passphrase, err

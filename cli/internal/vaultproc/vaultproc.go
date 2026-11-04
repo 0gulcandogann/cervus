@@ -17,6 +17,7 @@ import (
 type RemoteError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Vault   string `json:"vault,omitempty"` // the locked vault, when Code is "locked"
 }
 
 func (e *RemoteError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }

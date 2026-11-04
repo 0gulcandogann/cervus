@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"cervus/internal/awsapi"
-	"cervus/internal/vaultproc"
 )
 
 // testApp has a vault that can never start: a request that reaches it fails with "internal",
@@ -13,7 +12,7 @@ import (
 func testApp(t *testing.T) *app {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "no-such-vault")
-	return newApp(vaultproc.NewSupervisor(bin, nil), filepath.Join(t.TempDir(), "config.json"), "")
+	return newApp(newVaultSet(bin, nil, filepath.Join(t.TempDir(), "vault")), filepath.Join(t.TempDir(), "config.json"), "")
 }
 
 func errCode(t *testing.T, a *app, line string) string {

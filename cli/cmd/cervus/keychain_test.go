@@ -92,7 +92,7 @@ func TestPassphraseForNeedsOptInAndRespectsAHold(t *testing.T) {
 func TestKeychainEnableRefusedByEnvironment(t *testing.T) {
 	calls := fakeSecretTool(t)
 	t.Setenv("CERVUS_NO_KEYCHAIN", "1")
-	err := keychainEnable(t.TempDir(), []string{"--yes"})
+	err := keychainEnable(t.TempDir(), "", true)
 	if err == nil || !strings.Contains(err.Error(), "CERVUS_NO_KEYCHAIN") || len(*calls) != 0 {
 		t.Fatalf("err=%v calls=%v", err, *calls)
 	}

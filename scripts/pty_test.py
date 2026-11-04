@@ -136,6 +136,26 @@ def test_shell(name, argv, setup=()):
         ok("%s: unlocking from the picker completes the switch" % name) if seg else bad("%s: unlock from picker" % name, t.tail())
     ok("%s: the passphrase is not shown on screen" % name) if passphrase not in t.raw[mark:] else bad("%s: passphrase echoed" % name)
 
+    # one list reaches every vault: roles and users, each opening only its own vault
+    cervus("lock", "--vault", "other")
+    t.send("\x1br"); seg = t.expect("Switch role")
+    t.pump(0.5)
+    shown = (seg or "") + t.tail()
+    ok("%s: the picker shows the vault and the users" % name) if all(x in shown for x in ("other", "user:work", "user:outside")) else bad("%s: picker vaults and users" % name, shown)
+    t.send("4")
+    seg = t.expect('Vault "other" is locked. Passphrase:')
+    if seg is None: bad("%s: the picker names the locked vault" % name, t.tail())
+    else:
+        ok("%s: the picker names the locked vault" % name)
+        t.send("other vault passphrase\r")
+        seg = t.expect('Now using role "zeta"')
+        ok("%s: its own passphrase opens it and switches" % name) if seg else bad("%s: switch into another vault" % name, t.tail())
+    t.send("\x1br"); t.expect("Switch role")
+    t.send("5")
+    seg = t.expect('Now using role "user:outside"')
+    ok("%s: the picker switches to a user" % name) if seg else bad("%s: picker user" % name, t.tail())
+    t.run("'%s' use beta >/dev/null" % CERVUS, "M9")
+
     # cervus exec on a terminal with a locked vault: ask, then run; a wrong passphrase runs nothing
     awscfg = os.path.join(os.path.dirname(os.environ["CERVUS_SOCKET"]), "aws-config")
     with open(awscfg, "w") as f:

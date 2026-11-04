@@ -36,7 +36,7 @@ var seedRe = regexp.MustCompile(`^[A-Za-z2-7]{16,128}$`)
 // app holds daemon state: sessions (shell -> role) and in-memory credential caches.
 // Credentials are never written to disk.
 type app struct {
-	vault       *vaultproc.Supervisor
+	vaults      *vaultSet
 	cfgPath     string
 	stsEndpoint string
 	now         func() time.Time
@@ -50,9 +50,9 @@ type app struct {
 	lastCode  map[string]string
 }
 
-func newApp(v *vaultproc.Supervisor, cfgPath, stsEndpoint string) *app {
+func newApp(v *vaultSet, cfgPath, stsEndpoint string) *app {
 	return &app{
-		vault: v, cfgPath: cfgPath, stsEndpoint: stsEndpoint, now: time.Now,
+		vaults: v, cfgPath: cfgPath, stsEndpoint: stsEndpoint, now: time.Now,
 		sessions:  map[string]string{},
 		pids:      map[string]int{},
 		roleCache: map[string]awsapi.Credentials{},
@@ -82,6 +82,8 @@ var apiHandlers = map[string]handler{
 	"identity.list":       (*app).identityList,
 	"identity.update":     (*app).identityUpdate,
 	"identity.remove":     (*app).identityRemove,
+	"identity.move":       (*app).identityMove,
+	"vault.list":          (*app).vaultList,
 	"identity.verify_key": (*app).identityVerifyKey,
 	"identity.mfa_import": (*app).identityMFAImport,
 	"role.add":            (*app).roleAdd,
@@ -149,15 +151,39 @@ func pidAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// dropCachesIfLocked keeps credentials from outliving the vault's lock: the vault locks by itself when
-// idle and comes back locked after a crash, and does not tell the daemon. If the vault cannot answer,
-// it counts as locked. Caller holds a.mu.
+// dropCachesIfLocked keeps credentials from outliving their vault's lock: a vault locks by itself when
+// idle and comes back locked after a crash, and does not tell the daemon. A vault that cannot answer
+// counts as locked, and so does everything if the config cannot be read. Caller holds a.mu.
 func (a *app) dropCachesIfLocked() {
 	if len(a.roleCache) == 0 && len(a.identTok) == 0 {
 		return
 	}
-	if locked, e := a.vaultLocked(); e != nil || locked {
+	cfg, e := a.loadCfg()
+	if e != nil {
 		a.clearCachesLocked()
+		return
+	}
+	states := map[string]bool{}
+	isLocked := func(vault string) bool {
+		locked, seen := states[vault]
+		if !seen {
+			var e *apiErr
+			locked, e = a.vaultLocked(vault)
+			locked = locked || e != nil
+			states[vault] = locked
+		}
+		return locked
+	}
+	for name := range a.roleCache {
+		role, _ := resolveRole(name, cfg)
+		if isLocked(cfg.Identities[role.Identity].Vault) {
+			delete(a.roleCache, name)
+		}
+	}
+	for id := range a.identTok {
+		if isLocked(cfg.Identities[id].Vault) {
+			delete(a.identTok, id)
+		}
 	}
 }
 
@@ -193,33 +219,37 @@ func (a *app) sessionRegister(params json.RawMessage) (any, *apiErr) {
 
 // ---- vault helpers ----
 
-func (a *app) vaultCall(op string, params any) (json.RawMessage, *apiErr) {
+func (a *app) vaultCall(vault, op string, params any) (json.RawMessage, *apiErr) {
+	sup, name, e := a.vaults.get(vault)
+	if e != nil {
+		return nil, e
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fe("internal", "%v", err)
 	}
-	data, rerr, err := a.vault.Call(op, raw)
+	data, rerr, err := sup.Call(op, raw)
 	switch {
 	case errors.Is(err, vaultproc.ErrUnavailable):
 		return nil, fe("internal", "vault process crashed and was reset; it is locked, try again")
 	case err != nil:
 		return nil, fe("internal", "%v", err)
 	case rerr != nil:
-		return nil, rerr
+		return nil, lockedMessage(rerr, name)
 	}
 	return data, nil
 }
 
-func (a *app) vaultPut(name, typ, scope string, value []byte) *apiErr {
-	_, e := a.vaultCall("put", map[string]string{
+func (a *app) vaultPut(vault, name, typ, scope string, value []byte) *apiErr {
+	_, e := a.vaultCall(vault, "put", map[string]string{
 		"name": name, "type": typ, "scope": scope,
 		"value": base64.StdEncoding.EncodeToString(value),
 	})
 	return e
 }
 
-func (a *app) vaultGet(name string) ([]byte, *apiErr) {
-	data, e := a.vaultCall("get", map[string]string{"name": name})
+func (a *app) vaultGet(vault, name string) ([]byte, *apiErr) {
+	data, e := a.vaultCall(vault, "get", map[string]string{"name": name})
 	if e != nil {
 		return nil, e
 	}
@@ -241,8 +271,8 @@ type accessKey struct {
 	SecretAccessKey string `json:"secret_access_key"`
 }
 
-func (a *app) longTermCreds(identity string) (awsapi.Credentials, *apiErr) {
-	raw, e := a.vaultGet("aws-key." + identity)
+func (a *app) longTermCreds(vault, identity string) (awsapi.Credentials, *apiErr) {
+	raw, e := a.vaultGet(vault, "aws-key."+identity)
 	if e != nil {
 		if e.Code == "not_found" {
 			return awsapi.Credentials{}, fe("not_found", "no access key stored for identity %q", identity)
@@ -257,8 +287,8 @@ func (a *app) longTermCreds(identity string) (awsapi.Credentials, *apiErr) {
 }
 
 // totpCode returns a fresh MFA code, refusing to reuse a code AWS has probably already seen.
-func (a *app) totpCode(identity string) (string, *apiErr) {
-	data, e := a.vaultCall("totp", map[string]string{"name": "mfa-seed." + identity})
+func (a *app) totpCode(vault, identity string) (string, *apiErr) {
+	data, e := a.vaultCall(vault, "totp", map[string]string{"name": "mfa-seed." + identity})
 	if e != nil {
 		if e.Code == "not_found" {
 			return "", fe("mfa_not_configured", "no MFA seed for identity %q; run `cervus identity mfa-import %s`", identity, identity)
@@ -308,7 +338,7 @@ func (a *app) identitySession(name string, ident config.Identity, base awsapi.Cr
 	if ident.MFASerial == "" {
 		return awsapi.Credentials{}, fe("mfa_not_configured", "identity %q has no MFA serial", name)
 	}
-	code, e := a.totpCode(name)
+	code, e := a.totpCode(ident.Vault, name)
 	if e != nil {
 		return awsapi.Credentials{}, e
 	}
@@ -323,7 +353,7 @@ func (a *app) identitySession(name string, ident config.Identity, base awsapi.Cr
 // getCreds returns valid credentials for a role, refreshing them if needed. Caller holds a.mu.
 func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials, *apiErr) {
 	a.dropCachesIfLocked()
-	role, ok := cfg.Roles[roleName]
+	role, ok := resolveRole(roleName, cfg)
 	if !ok {
 		return awsapi.Credentials{}, fe("not_found", "unknown role %q", roleName)
 	}
@@ -341,7 +371,7 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 		dur = defaultDuration
 	}
 
-	base, e := a.longTermCreds(role.Identity)
+	base, e := a.longTermCreds(ident.Vault, role.Identity)
 	if e != nil {
 		return awsapi.Credentials{}, e
 	}
@@ -358,7 +388,7 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 	case role.ARN == "":
 		serial, code := "", ""
 		if role.MFA == "always" {
-			if code, e = a.totpCode(role.Identity); e != nil {
+			if code, e = a.totpCode(ident.Vault, role.Identity); e != nil {
 				return awsapi.Credentials{}, e
 			}
 			serial = ident.MFASerial
@@ -372,7 +402,7 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 				return awsapi.Credentials{}, e
 			}
 		case "always":
-			if code, e = a.totpCode(role.Identity); e != nil {
+			if code, e = a.totpCode(ident.Vault, role.Identity); e != nil {
 				return awsapi.Credentials{}, e
 			}
 			serial = ident.MFASerial
@@ -415,6 +445,7 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 		ID              string `json:"id"`
 		Region          string `json:"region"`
 		MFASerial       string `json:"mfa_serial"`
+		Vault           string `json:"vault"`
 		AccessKeyID     string `json:"access_key_id"`
 		SecretAccessKey string `json:"secret_access_key"`
 		Verify          *bool  `json:"verify"`
@@ -422,7 +453,14 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 	if e := parse(params, &p); e != nil {
 		return nil, e
 	}
+	vault, e := normalizeVault(p.Vault)
+	if e != nil {
+		return nil, e
+	}
 	ident := config.Identity{Region: p.Region, MFASerial: p.MFASerial}
+	if vault != defaultVault {
+		ident.Vault = vault
+	}
 	if err := ident.Validate(p.ID); err != nil {
 		return nil, fe("bad_request", "%v", err)
 	}
@@ -450,7 +488,7 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 		res["arn"], res["account"] = arn, account
 	}
 	blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
-	if e := a.vaultPut("aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
+	if e := a.vaultPut(ident.Vault, "aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
 		return nil, e
 	}
 	cfg.Identities[p.ID] = ident
@@ -469,10 +507,15 @@ func (a *app) identityList(params json.RawMessage) (any, *apiErr) {
 		Name      string `json:"name"`
 		Region    string `json:"region,omitempty"`
 		MFASerial string `json:"mfa_serial,omitempty"`
+		Vault     string `json:"vault"`
 	}
 	var out []item
 	for n, i := range cfg.Identities {
-		out = append(out, item{n, i.Region, i.MFASerial})
+		vault := i.Vault
+		if vault == "" {
+			vault = defaultVault
+		}
+		out = append(out, item{n, i.Region, i.MFASerial, vault})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return map[string]any{"identities": out}, nil
@@ -532,12 +575,12 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 	res := map[string]string{}
 	verified := p.Rotate && (p.Verify == nil || *p.Verify)
 	if p.Rotate {
-		locked, e := a.vaultLocked()
+		locked, e := a.vaultLocked(ident.Vault)
 		if e != nil {
 			return nil, e
 		}
 		if locked {
-			return nil, fe("locked", "vault is locked; run `cervus unlock`")
+			return nil, lockedMessage(&apiErr{Code: "locked", Message: "vault is locked; run `cervus unlock`"}, vaultDisplay(ident.Vault))
 		}
 	}
 	if verified {
@@ -547,7 +590,7 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 			return nil, awsErr(err)
 		}
 		res["arn"], res["account"] = arn, account
-		old, e := a.longTermCreds(p.ID)
+		old, e := a.longTermCreds(ident.Vault, p.ID)
 		if e != nil && e.Code != "not_found" {
 			return nil, e
 		}
@@ -569,15 +612,10 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return nil, fe("internal", "%v", err)
 	}
-	delete(a.identTok, p.ID)
-	for n, r := range cfg.Roles {
-		if r.Identity == p.ID {
-			delete(a.roleCache, n)
-		}
-	}
+	a.forgetIdentity(p.ID, cfg)
 	if p.Rotate {
 		blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
-		if e := a.vaultPut("aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
+		if e := a.vaultPut(ident.Vault, "aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
 			return nil, fe(e.Code, "the settings were saved but the key was not replaced: %s", e.Message)
 		}
 		event := map[string]any{"id": p.ID, "verified": verified}
@@ -592,8 +630,15 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 	return res, nil
 }
 
-func (a *app) vaultLocked() (bool, *apiErr) {
-	data, e := a.vaultCall("status", map[string]string{})
+func vaultDisplay(vault string) string {
+	if vault == "" {
+		return defaultVault
+	}
+	return vault
+}
+
+func (a *app) vaultLocked(vault string) (bool, *apiErr) {
+	data, e := a.vaultCall(vault, "status", map[string]string{})
 	if e != nil {
 		return false, e
 	}
@@ -617,7 +662,11 @@ func (a *app) identityVerifyKey(params json.RawMessage) (any, *apiErr) {
 	if e := parse(params, &p); e != nil {
 		return nil, e
 	}
-	stored, e := a.longTermCreds(p.ID)
+	cfg, e := a.loadCfg()
+	if e != nil {
+		return nil, e
+	}
+	stored, e := a.longTermCreds(cfg.Identities[p.ID].Vault, p.ID)
 	if e != nil {
 		return nil, e
 	}
@@ -648,7 +697,7 @@ func (a *app) identityMFAImport(params json.RawMessage) (any, *apiErr) {
 	if !ok {
 		return nil, fe("not_found", "unknown identity %q", p.ID)
 	}
-	if e := a.vaultPut("mfa-seed."+p.ID, "mfa_seed", "local", []byte(seed)); e != nil {
+	if e := a.vaultPut(ident.Vault, "mfa-seed."+p.ID, "mfa_seed", "local", []byte(seed)); e != nil {
 		return nil, e
 	}
 	delete(a.identTok, p.ID)
@@ -669,7 +718,8 @@ func (a *app) identityRemove(params json.RawMessage) (any, *apiErr) {
 	if e != nil {
 		return nil, e
 	}
-	if _, ok := cfg.Identities[p.ID]; !ok {
+	removed, ok := cfg.Identities[p.ID]
+	if !ok {
 		return nil, fe("not_found", "unknown identity %q", p.ID)
 	}
 	for n, r := range cfg.Roles {
@@ -678,13 +728,18 @@ func (a *app) identityRemove(params json.RawMessage) (any, *apiErr) {
 		}
 	}
 	for _, name := range []string{"aws-key." + p.ID, "mfa-seed." + p.ID} {
-		if _, e := a.vaultCall("delete", map[string]string{"name": name}); e != nil && e.Code != "not_found" {
+		if _, e := a.vaultCall(removed.Vault, "delete", map[string]string{"name": name}); e != nil && e.Code != "not_found" {
 			return nil, e
 		}
 	}
+	a.forgetIdentity(p.ID, cfg)
 	delete(cfg.Identities, p.ID)
-	delete(a.identTok, p.ID)
 	delete(a.lastCode, p.ID)
+	for s, r := range a.sessions {
+		if r == userRolePrefix+p.ID {
+			delete(a.sessions, s)
+		}
+	}
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return nil, fe("internal", "%v", err)
 	}
@@ -801,12 +856,13 @@ func (a *app) roleList(params json.RawMessage) (any, *apiErr) {
 		return nil, e
 	}
 	type item struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Vault string `json:"vault"`
 		config.Role
 	}
 	var out []item
 	for n, r := range cfg.Roles {
-		out = append(out, item{n, r})
+		out = append(out, item{n, vaultDisplay(cfg.Identities[r.Identity].Vault), r})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return map[string]any{"roles": out}, nil
@@ -863,7 +919,7 @@ func (a *app) use(params json.RawMessage) (any, *apiErr) {
 	if e != nil {
 		return nil, e
 	}
-	role, ok := cfg.Roles[p.Role]
+	role, ok := resolveRole(p.Role, cfg)
 	if !ok {
 		return nil, fe("not_found", "unknown role %q (see `cervus role list`)", p.Role)
 	}
@@ -924,7 +980,11 @@ func (a *app) whoami(params json.RawMessage) (any, *apiErr) {
 	role := a.sessions[p.Session]
 	out := map[string]any{"role": role}
 	if cfg, e := a.loadCfg(); e == nil {
-		out["protected"] = cfg.Roles[role].Confirm
+		r, _ := resolveRole(role, cfg)
+		out["protected"] = r.Confirm
+		if role != "" {
+			out["vault"] = vaultDisplay(cfg.Identities[r.Identity].Vault)
+		}
 	}
 	if c, ok := a.roleCache[role]; ok {
 		out["expires_at"] = c.Expiration.UTC().Format(time.RFC3339)

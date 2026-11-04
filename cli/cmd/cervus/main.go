@@ -44,22 +44,13 @@ func main() {
 	case "init":
 		err = cmdInit()
 	case "unlock":
-		err = cmdUnlock()
+		err = cmdUnlock(args)
 	case "lock":
-		if err = client.Call("lock", nil, nil); err == nil {
-			fmt.Println("vault locked")
-			if dir, derr := currentVaultDir(); derr == nil && hasKeychainMarker(dir, keychainEnabledFile) {
-				if herr := setKeychainMarker(dir, keychainHoldFile, true); herr != nil {
-					fmt.Fprintf(os.Stderr, "Warning: the keychain may reopen the vault on next use: %v\n", herr)
-				} else {
-					fmt.Println("It stays locked until `cervus unlock`, even with the passphrase in the keychain.")
-				}
-			}
-		}
+		err = cmdLock(args)
 	case "recover":
 		err = cmdRecover(args)
 	case "passwd":
-		err = cmdPasswd()
+		err = cmdPasswd(args)
 	case "secret":
 		err = cmdSecret(args)
 	case "identity":
@@ -72,6 +63,8 @@ func main() {
 		err = cmdExec(args)
 	case "keychain":
 		err = cmdKeychain(args)
+	case "vault":
+		err = cmdVault(args)
 	case "whoami":
 		err = cmdWhoami()
 	case "pick":
@@ -137,7 +130,18 @@ func cmdStatus() error {
 	return nil
 }
 
-func cmdInit() error {
+func cmdInit() error { return createVault("") }
+
+// vaultArg adds the vault to request parameters; no name means the default vault.
+func vaultArg(params map[string]string, vault string) map[string]string {
+	if vault != "" {
+		params["vault"] = vault
+	}
+	return params
+}
+
+// createVault makes a vault and shows its own recovery key.
+func createVault(vault string) error {
 	pass, err := readSecret("New passphrase (min 10 characters): ")
 	if err != nil {
 		return err
@@ -155,7 +159,7 @@ func cmdInit() error {
 	var out struct {
 		RecoveryKey string `json:"recovery_key"`
 	}
-	if err := client.Call("init", map[string]string{"passphrase": pass}, &out); err != nil {
+	if err := client.Call("init", vaultArg(map[string]string{"passphrase": pass}, vault), &out); err != nil {
 		return err
 	}
 	fmt.Println()
@@ -194,6 +198,7 @@ func confirmRecoveryKey(key string) {
 func cmdRecover(args []string) error {
 	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
 	drop := fs.Bool("drop-local", false, "delete device-only secrets that cannot be recovered")
+	vault := fs.String("vault", "", "vault to recover (default: the default vault)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -219,11 +224,15 @@ func cmdRecover(args []string) error {
 		Reencrypted int      `json:"reencrypted"`
 		LostLocal   []string `json:"lost_local"`
 	}
-	optedIn := keychainOptedIn()
-	if err := client.Call("recover", map[string]any{"recovery_key": key, "passphrase": pass, "drop_local": *drop}, &out); err != nil {
+	optedIn := keychainOptedIn(*vault)
+	params := map[string]any{"recovery_key": key, "passphrase": pass, "drop_local": *drop}
+	if *vault != "" {
+		params["vault"] = *vault
+	}
+	if err := client.Call("recover", params, &out); err != nil {
 		return err
 	}
-	keychainFollow(optedIn, pass)
+	keychainFollow(optedIn, pass, *vault)
 	fmt.Printf("Recovered. %d secret(s) re-encrypted for this device; the vault is unlocked with the new passphrase.\n", out.Reencrypted)
 	if len(out.LostLocal) > 0 {
 		fmt.Println("\nThese device-only secrets could not be recovered (they were encrypted to the old device key):")
@@ -239,7 +248,12 @@ func cmdRecover(args []string) error {
 	return nil
 }
 
-func cmdPasswd() error {
+func cmdPasswd(args []string) error {
+	fs := flag.NewFlagSet("passwd", flag.ContinueOnError)
+	vault := fs.String("vault", "", "vault to change (default: the default vault)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	current, err := readSecret("Current passphrase: ")
 	if err != nil {
 		return err
@@ -258,11 +272,11 @@ func cmdPasswd() error {
 	if pass != again {
 		return errors.New("passphrases do not match")
 	}
-	optedIn := keychainOptedIn()
-	if err := client.Call("passwd", map[string]string{"current": current, "new": pass}, nil); err != nil {
+	optedIn := keychainOptedIn(*vault)
+	if err := client.Call("passwd", vaultArg(map[string]string{"current": current, "new": pass}, *vault), nil); err != nil {
 		return err
 	}
-	keychainFollow(optedIn, pass)
+	keychainFollow(optedIn, pass, *vault)
 	fmt.Println("Passphrase changed. Your secrets and your recovery key are unchanged.")
 	fmt.Println("If the old passphrase or a copy of the vault was exposed, this is not enough: an old copy still opens")
 	fmt.Println("with the old passphrase. Run `cervus recover` for a new device key and rotate your secrets.")
@@ -301,13 +315,59 @@ func cmdAudit(args []string) error {
 	return nil
 }
 
-func cmdUnlock() error {
-	dir, err := currentVaultDir()
+func cmdLock(args []string) error {
+	fs := flag.NewFlagSet("lock", flag.ContinueOnError)
+	vault := fs.String("vault", "", "lock only this vault (default: all of them)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := client.Call("lock", vaultArg(map[string]string{}, *vault), nil); err != nil {
+		return err
+	}
+	if *vault != "" {
+		fmt.Printf("vault %q locked\n", *vault)
+	} else {
+		fmt.Println("vault locked")
+	}
+	// A deliberate lock holds against the keychain until an explicit unlock.
+	dirs := map[string]string{}
+	if *vault != "" {
+		if dir, err := currentVaultDir(*vault); err == nil {
+			dirs[*vault] = dir
+		}
+	} else {
+		var out vaultListing
+		if client.Call("vault.list", nil, &out) == nil {
+			for _, v := range out.Vaults {
+				dirs[v.Name] = v.Dir
+			}
+		}
+	}
+	for _, dir := range dirs {
+		if !hasKeychainMarker(dir, keychainEnabledFile) {
+			continue
+		}
+		if err := setKeychainMarker(dir, keychainHoldFile, true); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: the keychain may reopen the vault on next use: %v\n", err)
+		} else {
+			fmt.Println("It stays locked until `cervus unlock`, even with the passphrase in the keychain.")
+		}
+	}
+	return nil
+}
+
+func cmdUnlock(args []string) error {
+	fs := flag.NewFlagSet("unlock", flag.ContinueOnError)
+	vault := fs.String("vault", "", "vault to unlock (default: the default vault)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir, err := currentVaultDir(*vault)
 	if err != nil {
 		return err
 	}
 	if stored := passphraseFor(dir, false); stored != "" {
-		uerr := sendUnlock(stored, "keychain")
+		uerr := sendUnlock(stored, "keychain", *vault)
 		if uerr == nil {
 			_ = setKeychainMarker(dir, keychainHoldFile, false)
 			fmt.Println("vault unlocked (passphrase from the keychain)")
@@ -322,7 +382,7 @@ func cmdUnlock() error {
 	if err != nil {
 		return err
 	}
-	if err := sendUnlock(pass, ""); err != nil {
+	if err := sendUnlock(pass, "", *vault); err != nil {
 		return err
 	}
 	_ = setKeychainMarker(dir, keychainHoldFile, false)
@@ -341,7 +401,8 @@ func cmdSecret(args []string) error {
 		fs := flag.NewFlagSet("secret put", flag.ContinueOnError)
 		local := fs.Bool("local", false, "device-only secret (never synced)")
 		kind := fs.String("type", "generic", "secret type label")
-		name, err := parseWithName(fs, args[1:], "usage: cervus secret put [--local] [--type T] <name>   (value from stdin)")
+		vault := fs.String("vault", "", vaultFlagHelp)
+		name, err := parseWithName(fs, args[1:], "usage: cervus secret put [--vault V] [--local] [--type T] <name>   (value from stdin)")
 		if err != nil {
 			return err
 		}
@@ -353,21 +414,22 @@ func cmdSecret(args []string) error {
 		if *local {
 			scope = "local"
 		}
-		return client.Call("secret.put", map[string]string{
+		return client.Call("secret.put", vaultArg(map[string]string{
 			"name": name, "type": *kind, "scope": scope,
 			"value": base64.StdEncoding.EncodeToString(value),
-		}, nil)
+		}, secretVault(*vault)), nil)
 	case "get":
 		fs := flag.NewFlagSet("secret get", flag.ContinueOnError)
 		nl := fs.Bool("n", false, "append a trailing newline")
-		name, err := parseWithName(fs, args[1:], "usage: cervus secret get [-n] <name>")
+		vault := fs.String("vault", "", vaultFlagHelp)
+		name, err := parseWithName(fs, args[1:], "usage: cervus secret get [--vault V] [-n] <name>")
 		if err != nil {
 			return err
 		}
 		var out struct {
 			Value string `json:"value"`
 		}
-		if err := client.Call("secret.get", map[string]string{"name": name}, &out); err != nil {
+		if err := client.Call("secret.get", vaultArg(map[string]string{"name": name}, secretVault(*vault)), &out); err != nil {
 			return err
 		}
 		raw, err := base64.StdEncoding.DecodeString(out.Value)
@@ -380,17 +442,19 @@ func cmdSecret(args []string) error {
 		_, err = os.Stdout.Write(raw)
 		return err
 	case "list":
-		prefix := ""
-		if len(args) > 1 {
-			prefix = args[1]
+		fs := flag.NewFlagSet("secret list", flag.ContinueOnError)
+		vault := fs.String("vault", "", vaultFlagHelp)
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
 		}
+		prefix := fs.Arg(0)
 		var out struct {
 			Secrets []struct {
 				Name  string `json:"name"`
 				Scope string `json:"scope"`
 			} `json:"secrets"`
 		}
-		if err := client.Call("secret.list", map[string]string{"prefix": prefix}, &out); err != nil {
+		if err := client.Call("secret.list", vaultArg(map[string]string{"prefix": prefix}, secretVault(*vault)), &out); err != nil {
 			return err
 		}
 		for _, s := range out.Secrets {
@@ -398,10 +462,13 @@ func cmdSecret(args []string) error {
 		}
 		return nil
 	case "rm":
-		if len(args) != 2 {
-			return errors.New("usage: cervus secret rm <name>")
+		fs := flag.NewFlagSet("secret rm", flag.ContinueOnError)
+		vault := fs.String("vault", "", vaultFlagHelp)
+		name, err := parseWithName(fs, args[1:], "usage: cervus secret rm [--vault V] <name>")
+		if err != nil {
+			return err
 		}
-		return client.Call("secret.delete", map[string]string{"name": args[1]}, nil)
+		return client.Call("secret.delete", vaultArg(map[string]string{"name": name}, secretVault(*vault)), nil)
 	}
 	return fmt.Errorf("unknown secret command %q", args[0])
 }
@@ -410,7 +477,7 @@ func cmdSecret(args []string) error {
 
 func cmdIdentity(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus identity <add|update|list|remove|mfa-import> ...")
+		return errors.New("usage: cervus identity <add|update|move|list|remove|mfa-import> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -418,9 +485,14 @@ func cmdIdentity(args []string) error {
 		region := fs.String("region", "us-east-1", "default AWS region")
 		serial := fs.String("mfa-serial", "", "MFA device ARN (arn:aws:iam::<acct>:mfa/<name>)")
 		noVerify := fs.Bool("no-verify", false, "do not check the keys against AWS")
-		id, err := parseWithName(fs, args[1:], "usage: cervus identity add <name> [--region R] [--mfa-serial ARN] [--no-verify]")
+		vault := fs.String("vault", "", "vault to keep this user in (default: the default vault)")
+		ownVault := fs.Bool("own-vault", false, "create a new vault for this user, named after it")
+		id, err := parseWithName(fs, args[1:], "usage: cervus identity add <name> [--vault V | --own-vault] [--region R] [--mfa-serial ARN] [--no-verify]")
 		if err != nil {
 			return err
+		}
+		if *ownVault && *vault != "" {
+			return errors.New("use --vault or --own-vault, not both")
 		}
 		keyID, err := readLine("AWS access key ID: ")
 		if err != nil {
@@ -430,12 +502,18 @@ func cmdIdentity(args []string) error {
 		if err != nil {
 			return err
 		}
+		if *ownVault {
+			if err := createVault(id); err != nil {
+				return err
+			}
+			*vault = id
+		}
 		var out struct {
 			Arn     string `json:"arn"`
 			Account string `json:"account"`
 		}
 		err = client.Call("identity.add", map[string]any{
-			"id": id, "region": *region, "mfa_serial": *serial,
+			"id": id, "region": *region, "mfa_serial": *serial, "vault": *vault,
 			"access_key_id": keyID, "secret_access_key": secret, "verify": !*noVerify,
 		}, &out)
 		if err != nil {
@@ -445,6 +523,21 @@ func cmdIdentity(args []string) error {
 			fmt.Printf("Verified with AWS: %s (account %s)\n", out.Arn, out.Account)
 		}
 		fmt.Printf("Identity %q saved; the access key is stored encrypted in the vault.\n", id)
+		return nil
+	case "move":
+		fs := flag.NewFlagSet("identity move", flag.ContinueOnError)
+		vault := fs.String("vault", "", "vault to move this user to")
+		id, err := parseWithName(fs, args[1:], "usage: cervus identity move <name> --vault V")
+		if err != nil {
+			return err
+		}
+		if *vault == "" {
+			return errors.New("usage: cervus identity move <name> --vault V")
+		}
+		if err := client.Call("identity.move", map[string]string{"id": id, "vault": *vault}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Identity %q moved to vault %q. Its roles keep working.\n", id, *vault)
 		return nil
 	case "update":
 		fs := flag.NewFlagSet("identity update", flag.ContinueOnError)
@@ -528,6 +621,7 @@ func cmdIdentity(args []string) error {
 				Name      string `json:"name"`
 				Region    string `json:"region"`
 				MFASerial string `json:"mfa_serial"`
+				Vault     string `json:"vault"`
 			} `json:"identities"`
 		}
 		if err := client.Call("identity.list", nil, &out); err != nil {
@@ -538,7 +632,7 @@ func cmdIdentity(args []string) error {
 			if i.MFASerial != "" {
 				mfa = i.MFASerial
 			}
-			fmt.Printf("%-20s %-14s %s\n", i.Name, i.Region, mfa)
+			fmt.Printf("%-20s %-14s %-14s %s\n", i.Name, i.Region, i.Vault, mfa)
 		}
 		return nil
 	case "remove":
@@ -664,8 +758,8 @@ type useResult struct {
 // confirm decides whether to proceed.
 // sendUnlock is a variable so tests can run withUnlock without a daemon.
 // source is "keychain" for an automatic unlock, so the audit log can tell it from a typed one.
-var sendUnlock = func(passphrase, source string) error {
-	params := map[string]string{"passphrase": passphrase}
+var sendUnlock = func(passphrase, source, vault string) error {
+	params := vaultArg(map[string]string{"passphrase": passphrase}, vault)
 	if source != "" {
 		params["source"] = source
 	}
@@ -675,14 +769,15 @@ var sendUnlock = func(passphrase, source string) error {
 // withUnlock runs call; if the vault is locked it tries the keychain, then asks once for the
 // passphrase, unlocks and retries. A nil ask means there is no terminal to ask on, so without a
 // stored passphrase the locked error stands.
-func withUnlock(call func() error, ask func() (string, error)) error {
+func withUnlock(call func() error, ask func(vault string) (string, error)) error {
 	err := call()
 	var re *client.RemoteError
 	if !errors.As(err, &re) || re.Code != "locked" {
 		return err
 	}
-	if stored := storedPassphrase(); stored != "" {
-		uerr := sendUnlock(stored, "keychain")
+	vault := re.Vault // the daemon names the vault that needs opening
+	if stored := storedPassphrase(vault); stored != "" {
+		uerr := sendUnlock(stored, "keychain", vault)
 		if uerr == nil {
 			return call()
 		}
@@ -693,18 +788,18 @@ func withUnlock(call func() error, ask func() (string, error)) error {
 	if ask == nil {
 		return err
 	}
-	passphrase, err := ask()
+	passphrase, err := ask(vault)
 	if err != nil {
 		return err
 	}
-	if err := sendUnlock(passphrase, ""); err != nil {
+	if err := sendUnlock(passphrase, "", vault); err != nil {
 		return err
 	}
-	keychainHoldOff()
+	keychainHoldOff(vault)
 	return call()
 }
 
-func switchRole(role string, yes bool, confirm func() (bool, error), ask func() (string, error)) (useResult, error) {
+func switchRole(role string, yes bool, confirm func() (bool, error), ask func(vault string) (string, error)) (useResult, error) {
 	call := func(confirmed bool) (useResult, error) {
 		var out useResult
 		err := withUnlock(func() error {
@@ -743,11 +838,18 @@ func confirmOnStdin(role string) func() (bool, error) {
 	}
 }
 
-func askOnStdin() func() (string, error) {
+func askOnStdin() func(string) (string, error) {
 	if !isTTY(os.Stdin) {
 		return nil
 	}
-	return func() (string, error) { return readSecret("Vault is locked. Passphrase: ") }
+	return func(vault string) (string, error) { return readSecret(unlockPrompt(vault)) }
+}
+
+func unlockPrompt(vault string) string {
+	if vault == "" || vault == "default" {
+		return "Vault is locked. Passphrase: "
+	}
+	return fmt.Sprintf("Vault %q is locked. Passphrase: ", vault)
 }
 
 func cmdUse(args []string) error {
@@ -913,18 +1015,21 @@ func usage() {
 	fmt.Print(`cervus - encrypted AWS secrets and role switching for your terminal
 
 Vault:
-  init                       Create the vault (passphrase + recovery key)
+  init                       Create the default vault (passphrase + recovery key)
+  vault create <n> | list    More vaults, each with its own passphrase and recovery key
   unlock | lock | status     Unlock, lock or inspect the vault
   passwd                     Change the passphrase
   keychain enable|disable|status   Keep the passphrase in the OS keychain (Linux, optional)
   recover [--drop-local]     Lost your passphrase? Reset it with the recovery key
-  secret put [--local] <n>   Store a secret (value from stdin)
+  secret put [--vault V] [--local] <n>   Store a secret (value from stdin)
+                             Without --vault: $CERVUS_VAULT, the active role's vault, else default
   secret get [-n] <n>        Print a secret to stdout
   secret list [prefix]       List secret names
   secret rm <n>              Delete a secret
 
 AWS:
-  identity add <n> [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
+  identity add <n> [--vault V | --own-vault] [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
+  identity move <n> --vault V  Carry a user's key and MFA seed to another vault
   identity mfa-import <n>    Store the MFA seed for an identity (device-only)
   identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify] [--allow-different-principal]
                              Rotate the key or change settings; roles and MFA seed stay
@@ -933,7 +1038,7 @@ AWS:
   role edit <n> [--identity I] [--arn ARN] [--region R] [--mfa M] [--confirm|--no-confirm] [--duration 1h]
                              Change only the given settings of a role
   role list | remove <n>
-  use [role] [--yes]         Switch this shell to a role (no argument opens the picker)
+  use [role|user:<n>] [--yes]  Switch this shell to a role or user (no argument opens the picker)
   exec <role> [--yes] -- <cmd>  Run one command pinned to a role, in its own session
   pick                       Interactive role picker (bound to Alt+r by init-shell)
   init-shell <zsh|bash> [--prompt] [--install]

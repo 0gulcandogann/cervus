@@ -21,4 +21,7 @@ printf "$PASS\n$PASS\n" | cv init >/dev/null 2>&1
 printf 'AKIATESTKEY\nSUPERSECRET\n' | cv identity add work >/dev/null 2>&1
 for r in alpha beta; do cv role add $r --identity work --arn arn:aws:iam::123456789012:role/$r >/dev/null; done
 cv role add gamma --identity work --arn arn:aws:iam::123456789012:role/gamma --confirm >/dev/null
+printf 'other vault passphrase\nother vault passphrase\n' | cv vault create other >/dev/null 2>&1
+printf 'AKIATESTKEY\nSUPERSECRET\n' | cv identity add outside --vault other >/dev/null 2>&1
+cv role add zeta --identity outside --arn arn:aws:iam::123456789012:role/zeta >/dev/null
 CERVUS_TEST_PASS="$PASS" python3 "$HERE/pty_test.py"

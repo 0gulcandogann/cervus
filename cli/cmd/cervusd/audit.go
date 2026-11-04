@@ -165,13 +165,14 @@ func formatEntry(e auditEntry) string {
 
 // auditedOps maps public operations to the parameter names that may be recorded.
 var auditedOps = map[string][]string{
-	"init":                nil,
-	"unlock":              {"source"},
-	"keychain.event":      {"action"},
-	"lock":                nil,
-	"passwd":              nil,
-	"recover":             {"drop_local"},
-	"identity.add":        {"id", "region"},
+	"init":                {"vault"},
+	"unlock":              {"source", "vault"},
+	"keychain.event":      {"action", "vault"},
+	"lock":                {"vault"},
+	"passwd":              {"vault"},
+	"recover":             {"drop_local", "vault"},
+	"identity.add":        {"id", "region", "vault"},
+	"identity.move":       {"id", "vault"},
 	"identity.update":     {"id", "region", "mfa_serial", "rotate", "verify", "allow_different_principal"},
 	"identity.remove":     {"id"},
 	"identity.verify_key": {"id"},
@@ -180,9 +181,9 @@ var auditedOps = map[string][]string{
 	"role.edit":           {"name", "identity", "arn", "mfa", "confirm"},
 	"role.remove":         {"name"},
 	"use":                 {"role", "session"},
-	"secret.put":          {"name", "scope", "type"},
-	"secret.get":          {"name"},
-	"secret.delete":       {"name"},
+	"secret.put":          {"name", "scope", "type", "vault"},
+	"secret.get":          {"name", "vault"},
+	"secret.delete":       {"name", "vault"},
 }
 
 // record writes an audit entry for a finished public request, if the operation is audited.

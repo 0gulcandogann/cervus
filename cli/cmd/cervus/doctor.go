@@ -100,6 +100,7 @@ func cmdDoctor() error {
 		Identities []struct {
 			Name      string `json:"name"`
 			MFASerial string `json:"mfa_serial"`
+			Vault     string `json:"vault"`
 		} `json:"identities"`
 	}
 	var roles struct {
@@ -119,15 +120,21 @@ func cmdDoctor() error {
 		d.report(lvlOK, fmt.Sprintf("%d identit(ies), %d role(s) configured", len(ids.Identities), len(roles.Roles)), "")
 	}
 	if st.Initialized && !st.Locked {
-		var seeds struct {
-			Secrets []struct {
-				Name string `json:"name"`
-			} `json:"secrets"`
-		}
-		_ = client.Call("secret.list", map[string]string{"prefix": "mfa-seed."}, &seeds)
+		// Seeds live in each user's own vault; a vault that cannot be read is not reported as missing one.
 		have := map[string]bool{}
-		for _, s := range seeds.Secrets {
-			have[strings.TrimPrefix(s.Name, "mfa-seed.")] = true
+		for _, ident := range ids.Identities {
+			var seeds struct {
+				Secrets []struct {
+					Name string `json:"name"`
+				} `json:"secrets"`
+			}
+			err := client.Call("secret.list", vaultArg(map[string]string{"prefix": "mfa-seed." + ident.Name}, ident.Vault), &seeds)
+			have[ident.Name] = err != nil
+			for _, sec := range seeds.Secrets {
+				if strings.TrimPrefix(sec.Name, "mfa-seed.") == ident.Name {
+					have[ident.Name] = true
+				}
+			}
 		}
 		needs := map[string]bool{}
 		for _, r := range roles.Roles {

@@ -93,11 +93,11 @@ func passphraseFor(dir string, honorHold bool) string {
 	return keychainLookup(dir)
 }
 
-func currentVaultDir() (string, error) {
+func currentVaultDir(vault string) (string, error) {
 	var st struct {
 		Dir string `json:"dir"`
 	}
-	if err := client.Call("status", nil, &st); err != nil {
+	if err := client.Call("status", vaultArg(map[string]string{}, vault), &st); err != nil {
 		return "", err
 	}
 	if st.Dir == "" {
@@ -108,34 +108,34 @@ func currentVaultDir() (string, error) {
 
 // storedPassphrase and keychainHoldOff are variables so tests can run withUnlock without a daemon.
 var (
-	storedPassphrase = func() string {
+	storedPassphrase = func(vault string) string {
 		if keychainTurnedOff() {
 			return ""
 		}
-		dir, err := currentVaultDir()
+		dir, err := currentVaultDir(vault)
 		if err != nil {
 			return ""
 		}
 		return passphraseFor(dir, true)
 	}
-	keychainHoldOff = func() {
-		if dir, err := currentVaultDir(); err == nil {
+	keychainHoldOff = func(vault string) {
+		if dir, err := currentVaultDir(vault); err == nil {
 			_ = setKeychainMarker(dir, keychainHoldFile, false)
 		}
 	}
 )
 
-func keychainOptedIn() bool {
-	dir, err := currentVaultDir()
+func keychainOptedIn(vault string) bool {
+	dir, err := currentVaultDir(vault)
 	return err == nil && hasKeychainMarker(dir, keychainEnabledFile)
 }
 
 // keychainFollow keeps a stored passphrase in step after it changed.
-func keychainFollow(optedIn bool, passphrase string) {
+func keychainFollow(optedIn bool, passphrase, vault string) {
 	if !optedIn {
 		return
 	}
-	dir, err := currentVaultDir()
+	dir, err := currentVaultDir(vault)
 	if err == nil {
 		if keychainTurnedOff() {
 			err = errors.New(keychainDisabledMsg)
@@ -164,19 +164,25 @@ const keychainTradeoff = `This stores your vault passphrase in the OS keychain (
 
 func cmdKeychain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus keychain <enable [--yes]|disable|status>")
+		return errors.New("usage: cervus keychain <enable [--yes]|disable|status> [--vault V]")
 	}
-	dir, err := currentVaultDir()
+	fs := flag.NewFlagSet("keychain", flag.ContinueOnError)
+	vault := fs.String("vault", "", "vault to use (default: the default vault)")
+	yes := fs.Bool("yes", false, "accept the trade-off without asking")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: cervus keychain <enable [--yes]|disable|status> [--vault V]")
+	}
+	dir, err := currentVaultDir(*vault)
 	if err != nil {
 		return err
 	}
 	switch args[0] {
 	case "enable":
-		return keychainEnable(dir, args[1:])
+		return keychainEnable(dir, *vault, *yes)
 	case "disable":
-		if len(args) != 1 {
-			return errors.New("usage: cervus keychain disable")
-		}
 		if keychainTurnedOff() {
 			return errors.New(keychainDisabledMsg)
 		}
@@ -187,7 +193,7 @@ func cmdKeychain(args []string) error {
 			return err
 		}
 		_ = setKeychainMarker(dir, keychainHoldFile, false)
-		_ = client.Call("keychain.event", map[string]string{"action": "disabled"}, nil)
+		_ = client.Call("keychain.event", vaultArg(map[string]string{"action": "disabled"}, *vault), nil)
 		fmt.Println("The passphrase is no longer in the keychain.")
 		return nil
 	case "status":
@@ -211,15 +217,7 @@ func keychainStatusLine(dir string) string {
 	return "The passphrase is stored in the keychain; the vault reopens by itself after an idle lock."
 }
 
-func keychainEnable(dir string, args []string) error {
-	fs := flag.NewFlagSet("keychain enable", flag.ContinueOnError)
-	yes := fs.Bool("yes", false, "accept the trade-off without asking")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: cervus keychain enable [--yes]")
-	}
+func keychainEnable(dir, vault string, yes bool) error {
 	if keychainTurnedOff() {
 		return errors.New(keychainDisabledMsg)
 	}
@@ -230,7 +228,7 @@ func keychainEnable(dir string, args []string) error {
 		return errors.New("secret-tool not found; install libsecret (package libsecret or libsecret-tools)")
 	}
 	fmt.Println(keychainTradeoff)
-	if !*yes {
+	if !yes {
 		if !isTTY(os.Stdin) {
 			return errors.New("re-run with --yes to accept this")
 		}
@@ -244,7 +242,7 @@ func keychainEnable(dir string, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := sendUnlock(passphrase, ""); err != nil { // only a passphrase that works gets stored
+	if err := sendUnlock(passphrase, "", vault); err != nil { // only a passphrase that works gets stored
 		return err
 	}
 	if err := keychainStore(dir, passphrase); err != nil {
@@ -259,7 +257,7 @@ func keychainEnable(dir string, args []string) error {
 		return err
 	}
 	_ = setKeychainMarker(dir, keychainHoldFile, false)
-	_ = client.Call("keychain.event", map[string]string{"action": "enabled"}, nil)
+	_ = client.Call("keychain.event", vaultArg(map[string]string{"action": "enabled"}, vault), nil)
 	fmt.Println("Stored. Undo with `cervus keychain disable`.")
 	return nil
 }
