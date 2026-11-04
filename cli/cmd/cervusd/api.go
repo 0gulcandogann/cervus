@@ -61,10 +61,15 @@ func newApp(v *vaultproc.Supervisor, cfgPath, stsEndpoint string) *app {
 	}
 }
 
-// clearCaches drops all cached credentials (called when the vault is locked on request).
+// clearCaches drops all cached credentials.
 func (a *app) clearCaches() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.clearCachesLocked()
+}
+
+// clearCachesLocked is clearCaches for a caller that holds a.mu.
+func (a *app) clearCachesLocked() {
 	a.roleCache = map[string]awsapi.Credentials{}
 	a.identTok = map[string]awsapi.Credentials{}
 	a.lastCode = map[string]string{}
@@ -128,10 +133,23 @@ func pidAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// gcSessions forgets shells whose process has exited.
+// dropCachesIfLocked keeps credentials from outliving the vault's lock: the vault locks by itself when
+// idle and comes back locked after a crash, and does not tell the daemon. If the vault cannot answer,
+// it counts as locked. Caller holds a.mu.
+func (a *app) dropCachesIfLocked() {
+	if len(a.roleCache) == 0 && len(a.identTok) == 0 {
+		return
+	}
+	if locked, e := a.vaultLocked(); e != nil || locked {
+		a.clearCachesLocked()
+	}
+}
+
+// gcSessions forgets shells whose process has exited, and drops credentials once the vault has locked.
 func (a *app) gcSessions() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.dropCachesIfLocked()
 	for s, pid := range a.pids {
 		if !pidAlive(pid) {
 			delete(a.pids, s)
@@ -288,6 +306,7 @@ func (a *app) identitySession(name string, ident config.Identity, base awsapi.Cr
 
 // getCreds returns valid credentials for a role, refreshing them if needed. Caller holds a.mu.
 func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials, *apiErr) {
+	a.dropCachesIfLocked()
 	role, ok := cfg.Roles[roleName]
 	if !ok {
 		return awsapi.Credentials{}, fe("not_found", "unknown role %q", roleName)

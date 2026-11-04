@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"cervus/internal/awsapi"
 	"cervus/internal/vaultproc"
 )
 
@@ -82,5 +83,15 @@ func TestAPIOpsAllowLowercaseParamKeys(t *testing.T) {
 	line := `{"id":1,"op":"role.edit","params":{"name":"ghost","mfa":"none"}}`
 	if got := errCode(t, testApp(t), line); got != "not_found" {
 		t.Fatalf("want not_found, got %q", got)
+	}
+}
+
+func TestGCClearsCachesWhenTheVaultIsNotUnlocked(t *testing.T) {
+	a := testApp(t) // its vault cannot start, which must count as locked
+	a.roleCache["dev"] = awsapi.Credentials{AccessKeyID: "x"}
+	a.identTok["work"] = awsapi.Credentials{AccessKeyID: "y"}
+	a.gcSessions()
+	if len(a.roleCache) != 0 || len(a.identTok) != 0 {
+		t.Fatalf("caches not cleared: %d %d", len(a.roleCache), len(a.identTok))
 	}
 }

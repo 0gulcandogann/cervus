@@ -83,7 +83,6 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - Real-AWS testing is partial: role switching with and without MFA and `credential_process` passed on Linux; credential refresh, `cervus migrate` and the shell picker have not been tried there. In one test AWS rejected a reused TOTP code, and Cervus refuses to reuse a code and tells you how long to wait.
 - MFA enrollment by QR code is not built yet; import an existing seed instead.
 - The picker and prompt are tested with bash 5.2 and zsh 5.9 in a pseudo-terminal, not in macOS Terminal, iTerm2 or with oh-my-zsh themes. In zsh the segment is added to `RPROMPT`; in bash it is prefixed to `PS1` and refreshes after the next command. On macOS, `Alt+r` needs "Use Option as Meta key" in your terminal.
-- `cervus lock` drops cached credentials, but the vault's idle auto-lock does not (yet) clear the daemon's cache.
 - The device key is protected by a passphrase; the OS keychain backend is planned.
 - macOS code paths (peer UID check, ptrace denial) are untested.
 - Go cannot zeroize memory; secrets passing through the daemon are not wiped.

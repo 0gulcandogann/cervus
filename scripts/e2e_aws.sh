@@ -221,6 +221,29 @@ cv exec dev -- touch "$T/ran" 2>&1 </dev/null | grep -qi "locked" && [ ! -e "$T/
 echo "$PASS" | cv unlock >/dev/null
 unset AWS_CONFIG_FILE CERVUS_SESSION_OWNER
 
+# --- idle auto-lock: cached credentials stop being served as soon as the vault locks
+(
+  export CERVUS_SOCKET="$T/run/idle.sock" CERVUS_SESSION=idle-test
+  mkdir -p "$T/idle"
+  "$B/cervusd" --socket "$CERVUS_SOCKET" --vault-bin "$B/cervus-vault" --vault-dir "$T/idle-vault" --config "$T/idle/config.json" \
+    --sts-endpoint "http://127.0.0.1:$PORT/" --idle-secs 3 --gc-interval 1h 2>/dev/null & IDLE=$!
+  sleep 1
+  printf "$PASS\n$PASS\n" | cv init >/dev/null 2>&1
+  printf 'AKIATESTKEY\nSUPERSECRETKEYVALUE\n' | cv identity add idle >/dev/null 2>&1
+  cv role add idlerole --identity idle --arn arn:aws:iam::123456789012:role/IdleRole >/dev/null
+  cv use idlerole >/dev/null 2>&1
+  cv credential-process | grep -q ASIAROLEIdleRole && ok "cached credentials are served while unlocked" || bad "idle: before lock"
+  sleep 4
+  N=$(grep -c 'role/IdleRole' "$LOG")
+  cv credential-process 2>&1 | grep -qi "locked" && ok "idle lock stops serving cached credentials" || bad "idle: cached credentials after lock"
+  [ "$(grep -c 'role/IdleRole' "$LOG")" = "$N" ] && ok "a locked vault does not call AWS" || bad "idle: AWS call while locked"
+  echo "$PASS" | cv unlock >/dev/null
+  cv credential-process | grep -q ASIAROLEIdleRole && ok "credentials work again after unlock" || bad "idle: after unlock"
+  kill "$IDLE" 2>/dev/null
+  exit "$FAILS"
+)
+FAILS=$((FAILS + $?))
+
 # --- audit log
 echo "$PASS" | cv unlock >/dev/null 2>&1
 AUD=$(cv audit -n 0)

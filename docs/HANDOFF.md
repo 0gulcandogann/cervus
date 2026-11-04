@@ -40,7 +40,7 @@ Not covered yet: credential refresh on expiry, `cervus migrate` and the shell pi
 
 ## Known gaps (small)
 
-1. Vault idle auto-lock does not clear the daemon's credential caches (`cervus lock` does). Fix: daemon polls vault `status`, or the vault reports lock events; clear caches when locked.
+1. Done: an idle lock or vault crash drops the daemon's credential caches, checked before serving credentials and on the GC tick.
 2. Audit log: truncation of the tail is undetectable. Option: periodically store the head hash in the vault.
 3. Sessions are keyed only by PID liveness (PID reuse is possible but unlikely within 30s).
 4. `cervus init` unlock UX: passphrase is required for every unlock (keychain not built).
@@ -81,7 +81,7 @@ Each task: use `superpowers:brainstorming` -> `writing-plans` -> TDD. Acceptance
 
 1. **Run the full suite** (`make test`), fix anything red. Commit baseline (`git init`, add `.gitignore` already present).
 2. **Done: run at login.** `cervus install-service`, `uninstall-service`, `doctor` check. Real systemd checked on Linux (2026-11-03): enable, start, restart after `kill -9`, status, uninstall. Not tested: an actual log out and log in. launchd behavior is unverified. The new unlock prompt has not run in zsh (zsh was not installed).
-3. **Known gap 1** (cache clear on idle lock).
+3. **Done: known gap 1** (cache clear on idle lock).
 4. **MFA enrollment with QR** (`cervus identity mfa-setup <id>`): IAM client in `awsapi` (`CreateVirtualMFADevice`, `EnableMFADevice`, SigV4 service `iam`, global endpoint, region us-east-1); render `otpauth://` QR in the terminal (prefer a small, audited QR dependency or a small own encoder with tests against known vectors); ask for two consecutive codes; store seed device-only; set the identity's `mfa_serial`. Fake IAM in `mock_sts.py`. Also show the base32 text as fallback. Explain missing IAM permissions clearly.
 5. **Git sync** (`cervus vault git init|sync`, `vault recipient add|remove`): `.gitignore` excluding `local/`, pre-push hook blocking non-`.age` files under `secrets/`, re-encrypt on recipient change, print "rotate these secrets" on removal. Needs a vault op to list/replace recipients.
 6. **OS keychain** (macOS Keychain, Linux Secret Service), optional, passphrase stays as fallback. Needs a macOS machine to test; mark untested parts honestly.
