@@ -22,10 +22,23 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 - `cervus audit` / `cervus audit verify`: hash-chained log of security events (never contains secrets). Lives next to `config.json`.
 - AWS CLI integration: `cervus aws-profile --install` adds a profile whose `credential_process` is `cervus credential-process`. Credentials stay in daemon memory and are refreshed before expiry.
 
+## Install
+
+Download a pre-release for your platform (`linux-amd64`, `linux-arm64`, `darwin-arm64`, `darwin-amd64`), and keep the three programs in one folder:
+
+```sh
+V=0.0.6 P=linux-amd64
+curl -LO "https://github.com/0gulcandogann/cervus/releases/download/v$V/cervus-$V-$P.tar.gz"
+gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # optional: proves GitHub Actions built it from this repo
+tar -xzf "cervus-$V-$P.tar.gz"
+export PATH="$PWD/cervus-$V-$P:$PATH"
+```
+
+The Linux builds need glibc 2.34 or newer. The macOS builds have never been run and are not notarized. To build from source instead, see below.
+
 ## Try it
 
 ```sh
-make build && export PATH="$PWD/bin:$PATH"
 cervus install-service   # starts cervusd now and at every login (or run `cervusd &` by hand)
 cervus init
 cervus identity add work --region eu-west-1 --mfa-serial arn:aws:iam::<acct>:mfa/<name>
@@ -59,6 +72,7 @@ The vault has no socket on disk; only the daemon can reach it. See `docs/PROTOCO
 Requirements: Go 1.22+, Rust 1.74+, Python 3.
 
 ```sh
+make build && export PATH="$PWD/bin:$PATH"
 make test     # unit tests + 4 end-to-end suites (vault, AWS with a fake STS, migrate/doctor, shell in a pty); ~3 minutes
 ```
 
