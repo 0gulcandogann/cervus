@@ -48,6 +48,9 @@ func main() {
 	case "lock":
 		if err = client.Call("lock", nil, nil); err == nil {
 			fmt.Println("vault locked")
+			if storedPassphrase() != "" {
+				fmt.Println("The passphrase is in the keychain, so the next use reopens the vault. To stop that: cervus keychain disable")
+			}
 		}
 	case "recover":
 		err = cmdRecover(args)
@@ -63,6 +66,8 @@ func main() {
 		err = cmdUse(args)
 	case "exec":
 		err = cmdExec(args)
+	case "keychain":
+		err = cmdKeychain(args)
 	case "whoami":
 		err = cmdWhoami()
 	case "pick":
@@ -210,9 +215,11 @@ func cmdRecover(args []string) error {
 		Reencrypted int      `json:"reencrypted"`
 		LostLocal   []string `json:"lost_local"`
 	}
+	wasStored := storedPassphrase() != ""
 	if err := client.Call("recover", map[string]any{"recovery_key": key, "passphrase": pass, "drop_local": *drop}, &out); err != nil {
 		return err
 	}
+	keychainFollow(wasStored, pass)
 	fmt.Printf("Recovered. %d secret(s) re-encrypted for this device; the vault is unlocked with the new passphrase.\n", out.Reencrypted)
 	if len(out.LostLocal) > 0 {
 		fmt.Println("\nThese device-only secrets could not be recovered (they were encrypted to the old device key):")
@@ -247,9 +254,11 @@ func cmdPasswd() error {
 	if pass != again {
 		return errors.New("passphrases do not match")
 	}
+	wasStored := storedPassphrase() != ""
 	if err := client.Call("passwd", map[string]string{"current": current, "new": pass}, nil); err != nil {
 		return err
 	}
+	keychainFollow(wasStored, pass)
 	fmt.Println("Passphrase changed. Your secrets and your recovery key are unchanged.")
 	fmt.Println("If the old passphrase or a copy of the vault was exposed, this is not enough: an old copy still opens")
 	fmt.Println("with the old passphrase. Run `cervus recover` for a new device key and rotate your secrets.")
@@ -289,6 +298,13 @@ func cmdAudit(args []string) error {
 }
 
 func cmdUnlock() error {
+	if stored := storedPassphrase(); stored != "" {
+		if sendUnlock(stored) == nil {
+			fmt.Println("vault unlocked (passphrase from the keychain)")
+			return nil
+		}
+		fmt.Fprintln(os.Stderr, "The passphrase in the keychain was refused; run `cervus keychain enable` again.")
+	}
 	pass, err := readSecret("Passphrase: ")
 	if err != nil {
 		return err
@@ -637,12 +653,22 @@ var sendUnlock = func(passphrase string) error {
 	return client.Call("unlock", map[string]string{"passphrase": passphrase}, nil)
 }
 
-// withUnlock runs call; if the vault is locked it asks once for the passphrase, unlocks and
-// retries. A nil ask means there is no terminal to ask on, so the locked error stands.
+// withUnlock runs call; if the vault is locked it tries the keychain, then asks once for the
+// passphrase, unlocks and retries. A nil ask means there is no terminal to ask on, so without a
+// stored passphrase the locked error stands.
 func withUnlock(call func() error, ask func() (string, error)) error {
 	err := call()
 	var re *client.RemoteError
-	if ask == nil || !errors.As(err, &re) || re.Code != "locked" {
+	if !errors.As(err, &re) || re.Code != "locked" {
+		return err
+	}
+	if stored := storedPassphrase(); stored != "" {
+		if sendUnlock(stored) == nil {
+			return call()
+		}
+		fmt.Fprintln(os.Stderr, "The passphrase in the keychain was refused; run `cervus keychain enable` again.")
+	}
+	if ask == nil {
 		return err
 	}
 	passphrase, err := ask()
@@ -739,7 +765,10 @@ func cmdWhoami() error {
 // cmdCredentialProcess prints credentials in the format the AWS CLI expects from credential_process.
 func cmdCredentialProcess() error {
 	var raw json.RawMessage
-	if err := client.Call("credentials", map[string]string{"session": sessionID()}, &raw); err != nil {
+	err := withUnlock(func() error {
+		return client.Call("credentials", map[string]string{"session": sessionID()}, &raw)
+	}, nil)
+	if err != nil {
 		return err
 	}
 	fmt.Println(string(raw))
@@ -864,6 +893,7 @@ Vault:
   init                       Create the vault (passphrase + recovery key)
   unlock | lock | status     Unlock, lock or inspect the vault
   passwd                     Change the passphrase
+  keychain enable|disable|status   Keep the passphrase in the OS keychain (Linux, optional)
   recover [--drop-local]     Lost your passphrase? Reset it with the recovery key
   secret put [--local] <n>   Store a secret (value from stdin)
   secret get [-n] <n>        Print a secret to stdout

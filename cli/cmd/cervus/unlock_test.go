@@ -10,8 +10,9 @@ import (
 
 func TestWithUnlock(t *testing.T) {
 	locked := &client.RemoteError{Code: "locked", Message: "vault is locked"}
-	oldUnlock := sendUnlock
-	t.Cleanup(func() { sendUnlock = oldUnlock })
+	oldUnlock, oldStored := sendUnlock, storedPassphrase
+	t.Cleanup(func() { sendUnlock, storedPassphrase = oldUnlock, oldStored })
+	storedPassphrase = func() string { return "" }
 
 	t.Run("not locked never asks", func(t *testing.T) {
 		asked := 0
@@ -53,6 +54,44 @@ func TestWithUnlock(t *testing.T) {
 	t.Run("no terminal keeps the locked error", func(t *testing.T) {
 		if err := withUnlock(func() error { return locked }, nil); !errors.Is(err, error(locked)) {
 			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("a stored passphrase unlocks without asking", func(t *testing.T) {
+		storedPassphrase = func() string { return "from keychain" }
+		defer func() { storedPassphrase = func() string { return "" } }()
+		calls := 0
+		var sent string
+		sendUnlock = func(p string) error { sent = p; return nil }
+		err := withUnlock(func() error {
+			calls++
+			if calls == 1 {
+				return locked
+			}
+			return nil
+		}, nil)
+		if err != nil || calls != 2 || sent != "from keychain" {
+			t.Fatalf("err=%v calls=%d sent=%q", err, calls, sent)
+		}
+	})
+	t.Run("a refused stored passphrase falls back to asking", func(t *testing.T) {
+		storedPassphrase = func() string { return "stale" }
+		defer func() { storedPassphrase = func() string { return "" } }()
+		calls, asked := 0, 0
+		sendUnlock = func(p string) error {
+			if p == "stale" {
+				return &client.RemoteError{Code: "auth_failed", Message: "wrong passphrase"}
+			}
+			return nil
+		}
+		err := withUnlock(func() error {
+			calls++
+			if calls == 1 {
+				return locked
+			}
+			return nil
+		}, func() (string, error) { asked++; return "typed", nil })
+		if err != nil || asked != 1 || calls != 2 {
+			t.Fatalf("err=%v asked=%d calls=%d", err, asked, calls)
 		}
 	})
 	t.Run("other errors pass through", func(t *testing.T) {

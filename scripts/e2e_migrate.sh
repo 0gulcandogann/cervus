@@ -4,6 +4,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="${BIN:-$HERE/../bin}"
+export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring
 T="$(mktemp -d)"; mkdir -p "$T/run" "$T/aws"
 export CERVUS_SOCKET="$T/run/cervus.sock" HOME="$T/home"; mkdir -p "$HOME"
 export AWS_SHARED_CREDENTIALS_FILE="$T/aws/credentials" AWS_CONFIG_FILE="$T/aws/config"

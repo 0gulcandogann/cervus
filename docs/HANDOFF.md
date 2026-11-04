@@ -15,6 +15,7 @@ Version: cervus 0.0.6, cervus-vault 0.0.6. Pre-release. Not reviewed. Core role 
 | Shell | `init-shell zsh|bash [--prompt] [--install]`, Alt+r picker, prompt segment | `e2e_shell.sh` (pty) |
 | Migration | `cervus migrate` (plaintext keys -> vault, role profiles import, verify before delete) | `e2e_migrate.sh` |
 | Release archives | `make dist`; CI and draft releases in `.github/workflows` | `scripts/test_dist.sh`; workflows need a real run to count as tested |
+| Keychain (Linux) | `cervus keychain enable\|disable\|status` | Go unit, `e2e.sh` and `e2e_aws.sh` with a fake `secret-tool` |
 | One-command roles | `cervus exec <role> [--yes] -- <cmd>` | Go unit, `e2e_aws.sh` (fake STS only), `pty_test.py` |
 | Key lifecycle | `identity update [--rotate-key]`, `role edit`, `passwd` | Rust unit, `e2e.sh`, `e2e_aws.sh` (fake STS only) |
 | Doctor | `cervus doctor`, including the login service | `e2e_migrate.sh` |
@@ -43,7 +44,7 @@ Not covered yet: credential refresh on expiry, `cervus migrate` and the shell pi
 1. Done: an idle lock or vault crash drops the daemon's credential caches, checked before serving credentials and on the GC tick.
 2. Audit log: truncation of the tail is undetectable. Option: periodically store the head hash in the vault.
 3. Sessions are keyed only by PID liveness (PID reuse is possible but unlikely within 30s).
-4. `cervus init` unlock UX: passphrase is required for every unlock (keychain not built).
+4. Without the optional keychain, every unlock needs the passphrase. macOS Keychain is not built.
 5. Keep the `lastCode` reuse guard: real AWS rejected a reused code (one sample, see the test pass above).
 
 ## Small issues from the install-service review (deferred)
@@ -84,7 +85,7 @@ Each task: use `superpowers:brainstorming` -> `writing-plans` -> TDD. Acceptance
 3. **Done: known gap 1** (cache clear on idle lock).
 4. **MFA enrollment with QR** (`cervus identity mfa-setup <id>`): IAM client in `awsapi` (`CreateVirtualMFADevice`, `EnableMFADevice`, SigV4 service `iam`, global endpoint, region us-east-1); render `otpauth://` QR in the terminal (prefer a small, audited QR dependency or a small own encoder with tests against known vectors); ask for two consecutive codes; store seed device-only; set the identity's `mfa_serial`. Fake IAM in `mock_sts.py`. Also show the base32 text as fallback. Explain missing IAM permissions clearly.
 5. **Git sync** (`cervus vault git init|sync`, `vault recipient add|remove`): `.gitignore` excluding `local/`, pre-push hook blocking non-`.age` files under `secrets/`, re-encrypt on recipient change, print "rotate these secrets" on removal. Needs a vault op to list/replace recipients.
-6. **OS keychain** (macOS Keychain, Linux Secret Service), optional, passphrase stays as fallback. Needs a macOS machine to test; mark untested parts honestly.
+6. **OS keychain.** Linux done: `cervus keychain`, through `secret-tool`, off by default, passphrase stays as fallback. macOS Keychain is not built and needs a macOS machine to test.
 7. **macOS peer check** (`LOCAL_PEERCRED`) in `peer_other.go`.
 8. **SSO identity kind** (IAM Identity Center device flow). Design doc section 7.
 9. **Hardening**: mlock in vault, fuzz tests for both parsers, CI (`go vet`, `govulncheck`, `cargo audit`, `cargo deny`), signed release builds, Homebrew tap.

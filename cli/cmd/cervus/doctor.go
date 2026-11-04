@@ -84,6 +84,9 @@ func cmdDoctor() error {
 		d.report(lvlOK, "vault is initialized and unlocked", "")
 	}
 	if st.Dir != "" {
+		if keychainLookup(st.Dir) != "" {
+			d.report(lvlOK, "passphrase is in the OS keychain; the vault opens by itself when needed", "")
+		}
 		d.checkPerm("vault directory", st.Dir)
 		d.checkPerm("device key", filepath.Join(st.Dir, "device.key.age"))
 	}

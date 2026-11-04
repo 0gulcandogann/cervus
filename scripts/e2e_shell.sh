@@ -4,6 +4,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export BIN="${BIN:-$HERE/../bin}"
+export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring
 T="$(mktemp -d)"; mkdir -p "$T/run"
 export CERVUS_SOCKET="$T/run/cervus.sock"
 PASS="correct horse battery"

@@ -11,6 +11,7 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 - Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
 - AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
 - One command on one role: `cervus exec prod -- terraform plan` runs in its own session, so switching roles in the shell does not move it. No credentials go into its environment.
+- Optional keychain: `cervus keychain enable` stores the passphrase in the Linux Secret Service, so the vault opens by itself. It is off by default; read the trade-off in Known limitations first.
 - Changing things later: `identity update --rotate-key` replaces a key without touching its roles or MFA seed, `role edit` changes only the settings you name, and `passwd` changes the passphrase.
 - Roles: `role add` with `--mfa none|once|always`, `--confirm`, `--duration`. `once` fetches one MFA-backed session token and assumes roles from it; `always` uses a fresh code every time.
 - Per-shell sessions: `CERVUS_SESSION=<id> cervus use <role>`. Two shells can hold two roles.
@@ -83,7 +84,7 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - Real-AWS testing is partial: role switching with and without MFA and `credential_process` passed on Linux; credential refresh, `cervus migrate` and the shell picker have not been tried there. In one test AWS rejected a reused TOTP code, and Cervus refuses to reuse a code and tells you how long to wait.
 - MFA enrollment by QR code is not built yet; import an existing seed instead.
 - The picker and prompt are tested with bash 5.2 and zsh 5.9 in a pseudo-terminal, not in macOS Terminal, iTerm2 or with oh-my-zsh themes. In zsh the segment is added to `RPROMPT`; in bash it is prefixed to `PS1` and refreshes after the next command. On macOS, `Alt+r` needs "Use Option as Meta key" in your terminal.
-- The device key is protected by a passphrase; the OS keychain backend is planned.
+- The device key is protected by a passphrase. `cervus keychain enable` can keep it in the Linux Secret Service (needs libsecret's `secret-tool`), which removes the prompts but lets any program running as you open the vault while your login keyring is open. It is off by default. macOS Keychain is not built.
 - macOS code paths (peer UID check, ptrace denial) are untested.
 - Go cannot zeroize memory; secrets passing through the daemon are not wiped.
 - The audit log detects edits and deletions in the middle, but not truncation of its end.

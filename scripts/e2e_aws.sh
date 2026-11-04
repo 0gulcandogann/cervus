@@ -4,6 +4,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="${BIN:-$HERE/../bin}"
+export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring, except the fake one below
 T="$(mktemp -d)"; mkdir -p "$T/run"
 export CERVUS_SOCKET="$T/run/cervus.sock"
 PASS="correct horse battery"
@@ -240,6 +241,24 @@ unset AWS_CONFIG_FILE CERVUS_SESSION_OWNER
   echo "$PASS" | cv unlock >/dev/null
   cv credential-process | grep -q ASIAROLEIdleRole && ok "credentials work again after unlock" || bad "idle: after unlock"
   kill "$IDLE" 2>/dev/null
+  exit "$FAILS"
+)
+FAILS=$((FAILS + $?))
+
+# --- a stored passphrase lets the AWS tools work on a locked vault
+mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
+(
+  unset CERVUS_NO_KEYCHAIN
+  export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring" CERVUS_SESSION=shell-kc
+  cv use dev >/dev/null 2>&1
+  cv lock >/dev/null
+  cv credential-process 2>&1 | grep -qi "locked" && ok "without a stored passphrase credential-process reports locked" || bad "kc: locked"
+  echo "$PASS" | cv keychain enable --yes >/dev/null 2>&1
+  cv lock >/dev/null
+  cv credential-process </dev/null 2>&1 | grep -q ASIAROLEDevTwo && ok "credential-process unlocks from the keychain" || bad "kc: credential-process"
+  cv lock >/dev/null
+  cv use dev </dev/null >/dev/null 2>&1 && ok "use unlocks from the keychain" || bad "kc: use"
+  cv keychain disable >/dev/null
   exit "$FAILS"
 )
 FAILS=$((FAILS + $?))
