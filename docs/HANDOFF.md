@@ -1,6 +1,6 @@
 # Handoff — where we stopped (2026-11-03)
 
-Version: cervus 0.0.5, cervus-vault 0.0.4. Pre-release. Not reviewed. Core role flows passed one real-AWS test pass (see below).
+Version: cervus 0.0.6, cervus-vault 0.0.6. Pre-release. Not reviewed. Core role flows passed one real-AWS test pass (see below).
 
 ## Done and tested (Linux, fake STS)
 

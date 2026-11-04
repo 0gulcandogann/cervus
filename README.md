@@ -4,7 +4,7 @@
 
 Encrypted AWS secrets and role switching for your terminal. Run it once; it stays in the background.
 
-> Status: pre-release (v0.0.5). The vault and the AWS role/MFA flow work and are tested against a fake STS server and passed one limited real-AWS test pass on Linux. MFA enrollment by QR and the OS keychain are not built. Do not use it for production credentials until it has had a full real-AWS test pass and an independent security review.
+> Status: pre-release (v0.0.6). The vault and the AWS role/MFA flow work and are tested against a fake STS server and passed one limited real-AWS test pass on Linux. MFA enrollment by QR and the OS keychain are not built. Do not use it for production credentials until it has had a full real-AWS test pass and an independent security review.
 
 ## What works today
 
