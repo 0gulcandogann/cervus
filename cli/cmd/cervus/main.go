@@ -48,8 +48,12 @@ func main() {
 	case "lock":
 		if err = client.Call("lock", nil, nil); err == nil {
 			fmt.Println("vault locked")
-			if storedPassphrase() != "" {
-				fmt.Println("The passphrase is in the keychain, so the next use reopens the vault. To stop that: cervus keychain disable")
+			if dir, derr := currentVaultDir(); derr == nil && hasKeychainMarker(dir, keychainEnabledFile) {
+				if herr := setKeychainMarker(dir, keychainHoldFile, true); herr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: the keychain may reopen the vault on next use: %v\n", herr)
+				} else {
+					fmt.Println("It stays locked until `cervus unlock`, even with the passphrase in the keychain.")
+				}
 			}
 		}
 	case "recover":
@@ -215,11 +219,11 @@ func cmdRecover(args []string) error {
 		Reencrypted int      `json:"reencrypted"`
 		LostLocal   []string `json:"lost_local"`
 	}
-	wasStored := storedPassphrase() != ""
+	optedIn := keychainOptedIn()
 	if err := client.Call("recover", map[string]any{"recovery_key": key, "passphrase": pass, "drop_local": *drop}, &out); err != nil {
 		return err
 	}
-	keychainFollow(wasStored, pass)
+	keychainFollow(optedIn, pass)
 	fmt.Printf("Recovered. %d secret(s) re-encrypted for this device; the vault is unlocked with the new passphrase.\n", out.Reencrypted)
 	if len(out.LostLocal) > 0 {
 		fmt.Println("\nThese device-only secrets could not be recovered (they were encrypted to the old device key):")
@@ -254,11 +258,11 @@ func cmdPasswd() error {
 	if pass != again {
 		return errors.New("passphrases do not match")
 	}
-	wasStored := storedPassphrase() != ""
+	optedIn := keychainOptedIn()
 	if err := client.Call("passwd", map[string]string{"current": current, "new": pass}, nil); err != nil {
 		return err
 	}
-	keychainFollow(wasStored, pass)
+	keychainFollow(optedIn, pass)
 	fmt.Println("Passphrase changed. Your secrets and your recovery key are unchanged.")
 	fmt.Println("If the old passphrase or a copy of the vault was exposed, this is not enough: an old copy still opens")
 	fmt.Println("with the old passphrase. Run `cervus recover` for a new device key and rotate your secrets.")
@@ -298,10 +302,19 @@ func cmdAudit(args []string) error {
 }
 
 func cmdUnlock() error {
-	if stored := storedPassphrase(); stored != "" {
-		if sendUnlock(stored) == nil {
+	dir, err := currentVaultDir()
+	if err != nil {
+		return err
+	}
+	if stored := passphraseFor(dir, false); stored != "" {
+		uerr := sendUnlock(stored, "keychain")
+		if uerr == nil {
+			_ = setKeychainMarker(dir, keychainHoldFile, false)
 			fmt.Println("vault unlocked (passphrase from the keychain)")
 			return nil
+		}
+		if !isAuthFailure(uerr) {
+			return uerr
 		}
 		fmt.Fprintln(os.Stderr, "The passphrase in the keychain was refused; run `cervus keychain enable` again.")
 	}
@@ -309,9 +322,10 @@ func cmdUnlock() error {
 	if err != nil {
 		return err
 	}
-	if err := client.Call("unlock", map[string]string{"passphrase": pass}, nil); err != nil {
+	if err := sendUnlock(pass, ""); err != nil {
 		return err
 	}
+	_ = setKeychainMarker(dir, keychainHoldFile, false)
 	fmt.Println("vault unlocked")
 	return nil
 }
@@ -649,8 +663,13 @@ type useResult struct {
 // switchRole switches this shell's session to a role. If the role is protected and yes is false,
 // confirm decides whether to proceed.
 // sendUnlock is a variable so tests can run withUnlock without a daemon.
-var sendUnlock = func(passphrase string) error {
-	return client.Call("unlock", map[string]string{"passphrase": passphrase}, nil)
+// source is "keychain" for an automatic unlock, so the audit log can tell it from a typed one.
+var sendUnlock = func(passphrase, source string) error {
+	params := map[string]string{"passphrase": passphrase}
+	if source != "" {
+		params["source"] = source
+	}
+	return client.Call("unlock", params, nil)
 }
 
 // withUnlock runs call; if the vault is locked it tries the keychain, then asks once for the
@@ -663,10 +682,13 @@ func withUnlock(call func() error, ask func() (string, error)) error {
 		return err
 	}
 	if stored := storedPassphrase(); stored != "" {
-		if sendUnlock(stored) == nil {
+		uerr := sendUnlock(stored, "keychain")
+		if uerr == nil {
 			return call()
 		}
-		fmt.Fprintln(os.Stderr, "The passphrase in the keychain was refused; run `cervus keychain enable` again.")
+		if isAuthFailure(uerr) {
+			fmt.Fprintln(os.Stderr, "The passphrase in the keychain was refused; run `cervus keychain enable` again.")
+		}
 	}
 	if ask == nil {
 		return err
@@ -675,9 +697,10 @@ func withUnlock(call func() error, ask func() (string, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := sendUnlock(passphrase); err != nil {
+	if err := sendUnlock(passphrase, ""); err != nil {
 		return err
 	}
+	keychainHoldOff()
 	return call()
 }
 

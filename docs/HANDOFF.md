@@ -74,6 +74,13 @@ Not covered yet: credential refresh on expiry, `cervus migrate` and the shell pi
 - `e2e_aws.sh` uses `sleep` around the pinned run; daemon restart, role removal during a run and outliving children have no automated test.
 - Only aws-cli v1 was used to check credential provider order; the Go SDK and Terraform were not.
 
+## Small issues from the keychain review (deferred)
+
+- A failed store in `keychain enable` can leave the vault unlocked; `keychain disable` needs a running daemon, and removing the vault or service leaves the keyring entry behind.
+- `secret-tool` is found through `PATH`; parallel commands on a locked vault each do a full unlock, with no backoff for a stale entry.
+- After an idle lock the prompt shows the old time until the next cache drop, then `expired`, not `locked`; cache hits do not count as vault activity; clearing caches also clears `lastCode`.
+- Only tested with gnome-keyring on one machine; KWallet, KeePassXC and sessions without D-Bus are not.
+
 ## Task list (in priority order)
 
 Agreed next order (2026-11-03): real-AWS test (task 10), then `install-service` (task 2), then ARN encryption (task 12).

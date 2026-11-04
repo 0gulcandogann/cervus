@@ -10,8 +10,9 @@ import (
 
 func TestWithUnlock(t *testing.T) {
 	locked := &client.RemoteError{Code: "locked", Message: "vault is locked"}
-	oldUnlock, oldStored := sendUnlock, storedPassphrase
-	t.Cleanup(func() { sendUnlock, storedPassphrase = oldUnlock, oldStored })
+	oldUnlock, oldStored, oldHold := sendUnlock, storedPassphrase, keychainHoldOff
+	t.Cleanup(func() { sendUnlock, storedPassphrase, keychainHoldOff = oldUnlock, oldStored, oldHold })
+	keychainHoldOff = func() {}
 	storedPassphrase = func() string { return "" }
 
 	t.Run("not locked never asks", func(t *testing.T) {
@@ -24,7 +25,7 @@ func TestWithUnlock(t *testing.T) {
 	t.Run("locked asks once and retries", func(t *testing.T) {
 		calls, asked := 0, 0
 		var sent string
-		sendUnlock = func(p string) error { sent = p; return nil }
+		sendUnlock = func(p, _ string) error { sent = p; return nil }
 		err := withUnlock(func() error {
 			calls++
 			if calls == 1 {
@@ -38,7 +39,7 @@ func TestWithUnlock(t *testing.T) {
 	})
 	t.Run("wrong passphrase does not retry", func(t *testing.T) {
 		calls := 0
-		sendUnlock = func(string) error { return &client.RemoteError{Code: "auth_failed", Message: "wrong passphrase"} }
+		sendUnlock = func(_, _ string) error { return &client.RemoteError{Code: "auth_failed", Message: "wrong passphrase"} }
 		err := withUnlock(func() error { calls++; return locked }, func() (string, error) { return "x", nil })
 		if err == nil || !strings.Contains(err.Error(), "wrong passphrase") || calls != 1 {
 			t.Fatalf("err=%v calls=%d", err, calls)
@@ -46,7 +47,7 @@ func TestWithUnlock(t *testing.T) {
 	})
 	t.Run("cancelled prompt stops", func(t *testing.T) {
 		cancelled := errors.New("cancelled")
-		sendUnlock = func(string) error { t.Fatal("must not unlock"); return nil }
+		sendUnlock = func(_, _ string) error { t.Fatal("must not unlock"); return nil }
 		if err := withUnlock(func() error { return locked }, func() (string, error) { return "", cancelled }); !errors.Is(err, cancelled) {
 			t.Fatalf("got %v", err)
 		}
@@ -61,7 +62,7 @@ func TestWithUnlock(t *testing.T) {
 		defer func() { storedPassphrase = func() string { return "" } }()
 		calls := 0
 		var sent string
-		sendUnlock = func(p string) error { sent = p; return nil }
+		sendUnlock = func(p, _ string) error { sent = p; return nil }
 		err := withUnlock(func() error {
 			calls++
 			if calls == 1 {
@@ -77,7 +78,7 @@ func TestWithUnlock(t *testing.T) {
 		storedPassphrase = func() string { return "stale" }
 		defer func() { storedPassphrase = func() string { return "" } }()
 		calls, asked := 0, 0
-		sendUnlock = func(p string) error {
+		sendUnlock = func(p, _ string) error {
 			if p == "stale" {
 				return &client.RemoteError{Code: "auth_failed", Message: "wrong passphrase"}
 			}

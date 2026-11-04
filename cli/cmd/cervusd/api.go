@@ -92,8 +92,24 @@ var apiHandlers = map[string]handler{
 	"credentials":         (*app).credentials,
 	"whoami":              (*app).whoami,
 	"session.register":    (*app).sessionRegister,
+	"keychain.event":      (*app).keychainEvent,
 	"audit.tail":          (*app).auditTail,
 	"audit.verify":        (*app).auditVerify,
+}
+
+// keychainEvent only exists to put enabling and disabling the keychain in the audit log. The client
+// does the keychain work and could skip this, so the log shows what honest clients did.
+func (a *app) keychainEvent(params json.RawMessage) (any, *apiErr) {
+	var p struct {
+		Action string `json:"action"`
+	}
+	if e := parse(params, &p); e != nil {
+		return nil, e
+	}
+	if p.Action != "enabled" && p.Action != "disabled" {
+		return nil, fe("bad_request", "action must be enabled or disabled")
+	}
+	return map[string]any{}, nil
 }
 
 func (a *app) auditTail(params json.RawMessage) (any, *apiErr) {

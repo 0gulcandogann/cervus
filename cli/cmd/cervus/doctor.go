@@ -84,8 +84,12 @@ func cmdDoctor() error {
 		d.report(lvlOK, "vault is initialized and unlocked", "")
 	}
 	if st.Dir != "" {
-		if keychainLookup(st.Dir) != "" {
-			d.report(lvlOK, "passphrase is in the OS keychain; the vault opens by itself when needed", "")
+		if !keychainTurnedOff() && hasKeychainMarker(st.Dir, keychainEnabledFile) {
+			if keychainLookup(st.Dir) == "" {
+				d.report(lvlWarn, "the keychain is enabled, but the passphrase could not be read", "open your login keyring, or run `cervus keychain enable` again")
+			} else {
+				d.report(lvlOK, "passphrase is in the OS keychain", "")
+			}
 		}
 		d.checkPerm("vault directory", st.Dir)
 		d.checkPerm("device key", filepath.Join(st.Dir, "device.key.age"))

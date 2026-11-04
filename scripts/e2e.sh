@@ -88,31 +88,46 @@ grep -q "cervus recover" <(printf '%s\n%s\n%s\n' "$NEW" "$NEW2" "$NEW2" | "$B/ce
 # --- keychain, against a fake secret-tool
 mkdir -p "$T/fakebin"; cp "$(dirname "$0")/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
 (
-  unset CERVUS_NO_KEYCHAIN
   export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring"
+  [ "$(command -v secret-tool)" = "$T/fakebin/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
+  echo "$NEW2" | "$B/cervus" keychain enable --yes 2>&1 | grep -q "CERVUS_NO_KEYCHAIN" && [ ! -e "$FAKE_KEYRING" ] && ok "CERVUS_NO_KEYCHAIN blocks enable" || bad "enable under CERVUS_NO_KEYCHAIN"
+  "$B/cervus" keychain status | grep -q "CERVUS_NO_KEYCHAIN" && ok "status names CERVUS_NO_KEYCHAIN" || bad "status under CERVUS_NO_KEYCHAIN"
+  unset CERVUS_NO_KEYCHAIN
   "$B/cervus" keychain status | grep -q "not stored" && ok "keychain starts empty" || bad "keychain status empty"
+  "$B/cervus" lock >/dev/null; echo "$NEW2" | "$B/cervus" unlock >/dev/null; "$B/cervus" doctor >/dev/null 2>&1
+  [ ! -e "$FAKE_KEYRING.args" ] && ok "without opting in, nothing calls secret-tool" || bad "secret-tool called without opt-in: $(cat "$FAKE_KEYRING.args")"
   echo "$NEW2" | "$B/cervus" keychain enable 2>&1 | grep -q -- "--yes" && [ ! -e "$FAKE_KEYRING" ] && ok "keychain enable needs --yes without a terminal" || bad "keychain needs --yes"
   echo "not the passphrase" | "$B/cervus" keychain enable --yes 2>&1 | grep -qi "wrong passphrase" && [ ! -e "$FAKE_KEYRING" ] && ok "keychain enable refuses a wrong passphrase" || bad "keychain wrong passphrase"
   echo "$NEW2" | "$B/cervus" keychain enable --yes > "$T/kc.txt" 2>&1 && ok "keychain enable succeeds" || bad "keychain enable: $(cat "$T/kc.txt")"
-  grep -q "any program running as you" "$T/kc.txt" && ok "keychain enable states the trade-off" || bad "keychain warning"
+  grep -q "any program running as you" "$T/kc.txt" && grep -q "MFA" "$T/kc.txt" && grep -q "cervus recover" "$T/kc.txt" && ok "keychain enable states the trade-offs" || bad "keychain warning"
   [ "$(cat "$FAKE_KEYRING")" = "$NEW2" ] && ok "the passphrase is stored" || bad "keychain stored value"
   "$B/cervus" keychain status | grep -q "is stored" && ok "keychain status reports it" || bad "keychain status stored"
-  "$B/cervus" lock | grep -q "keychain" && ok "lock warns that the keychain can reopen the vault" || bad "lock note"
+  "$B/cervus" audit -n 0 | grep -q 'keychain.event .*action=enabled' && ok "the audit log records enabling" || bad "audit enable"
+  : > "$FAKE_KEYRING.args"
+  "$B/cervus" lock | grep -q "cervus unlock" && ok "lock says it holds until cervus unlock" || bad "lock note"
+  ! grep -q lookup "$FAKE_KEYRING.args" && ok "lock does not read the passphrase" || bad "lock read the passphrase"
   "$B/cervus" unlock </dev/null 2>&1 | grep -q "unlocked" && ok "unlock uses the keychain without asking" || bad "keychain unlock"
+  "$B/cervus" audit -n 3 | grep -q 'unlock .*source=keychain' && ok "the audit log marks a keychain unlock" || bad "audit unlock source"
   "$B/cervus" secret get shared-one 2>&1 | grep -q shared-value && ok "the vault is open after a keychain unlock" || bad "secret after keychain unlock"
   printf '%s\n%s\n%s\n' "$NEW2" "$NEW" "$NEW" | "$B/cervus" passwd >/dev/null 2>&1
   [ "$(cat "$FAKE_KEYRING")" = "$NEW" ] && ok "passwd updates the stored passphrase" || bad "keychain after passwd"
   printf "$RK\n$NEW2\n$NEW2\n" | "$B/cervus" recover >/dev/null 2>&1
   [ "$(cat "$FAKE_KEYRING")" = "$NEW2" ] && ok "recover updates the stored passphrase" || bad "keychain after recover"
-  printf 'stale value' > "$FAKE_KEYRING"; "$B/cervus" lock >/dev/null
-  echo "$NEW2" | "$B/cervus" unlock > "$T/kc2.txt" 2>&1; grep -q "refused" "$T/kc2.txt" && grep -q "unlocked" "$T/kc2.txt" && ok "a stale stored passphrase falls back to asking" || bad "keychain stale"
-  ! grep -qE "$NEW|$NEW2|stale value" "$FAKE_KEYRING.args" && ok "no passphrase in secret-tool arguments" || bad "passphrase in arguments"
+  touch "$FAKE_KEYRING.closed"
+  "$B/cervus" keychain status | grep -q "could not be read" && ok "a closed keyring is not reported as empty" || bad "status closed keyring"
+  "$B/cervus" doctor 2>&1 | grep -q "could not be read" && ok "doctor reports a closed keyring" || bad "doctor closed keyring"
+  printf '%s\n%s\n%s\n' "$NEW2" "$NEW" "$NEW" | "$B/cervus" passwd 2>&1 | grep -q "could not update the keychain" && ok "passwd warns when it cannot update a closed keyring" || bad "passwd closed keyring"
+  rm -f "$FAKE_KEYRING.closed"
+  "$B/cervus" lock >/dev/null
+  echo "$NEW" | "$B/cervus" unlock > "$T/kc2.txt" 2>&1; grep -q "refused" "$T/kc2.txt" && grep -q "unlocked" "$T/kc2.txt" && ok "a stale stored passphrase falls back to asking" || bad "keychain stale"
+  ! grep -qE "$NEW|$NEW2" "$FAKE_KEYRING.args" && ok "no passphrase in secret-tool arguments" || bad "passphrase in arguments"
   ! grep -qE "$NEW|$NEW2" "$T/d.log" "$T/audit.log" 2>/dev/null && ok "no passphrase in the logs after keychain use" || bad "keychain passphrase in logs"
   "$B/cervus" keychain disable >/dev/null && [ ! -e "$FAKE_KEYRING" ] && ok "keychain disable removes it" || bad "keychain disable"
+  "$B/cervus" audit -n 3 | grep -q 'keychain.event .*action=disabled' && ok "the audit log records disabling" || bad "audit disable"
   "$B/cervus" lock >/dev/null; "$B/cervus" unlock </dev/null >/dev/null 2>&1 && bad "unlock succeeded with nothing stored" || ok "after disable, unlock needs the passphrase again"
-  exit "$FAILS"
+  exit $((FAILS > 0))
 )
-FAILS=$((FAILS + $?))
+[ $? = 0 ] || FAILS=$((FAILS+1))
 kill "$D3" 2>/dev/null
 
 echo; [ "$FAILS" = 0 ] && echo "all checks passed" || { echo "$FAILS check(s) failed"; exit 1; }

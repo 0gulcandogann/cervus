@@ -166,7 +166,8 @@ func formatEntry(e auditEntry) string {
 // auditedOps maps public operations to the parameter names that may be recorded.
 var auditedOps = map[string][]string{
 	"init":                nil,
-	"unlock":              nil,
+	"unlock":              {"source"},
+	"keychain.event":      {"action"},
 	"lock":                nil,
 	"passwd":              nil,
 	"recover":             {"drop_local"},
@@ -193,6 +194,9 @@ func (l *auditLog) record(op string, params json.RawMessage, resp outResponse) {
 	fields := map[string]any{}
 	var in map[string]any
 	_ = json.Unmarshal(params, &in)
+	if op == "unlock" && in["source"] != "keychain" {
+		delete(in, "source") // the only value worth recording; anything else could be a mistake
+	}
 	for _, k := range allowed {
 		if v, ok := in[k]; ok {
 			fields[k] = v

@@ -61,3 +61,39 @@ func TestKeychainDisabledByEnvironment(t *testing.T) {
 		t.Fatalf("secret-tool must not run: %v", *calls)
 	}
 }
+
+func TestPassphraseForNeedsOptInAndRespectsAHold(t *testing.T) {
+	dir := t.TempDir()
+	calls := fakeSecretTool(t)
+	if got := passphraseFor(dir, true); got != "" || len(*calls) != 0 {
+		t.Fatalf("no opt-in: got %q, calls %v", got, *calls)
+	}
+	if err := setKeychainMarker(dir, keychainEnabledFile, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := passphraseFor(dir, true); got != "pass phrase" {
+		t.Fatalf("enabled: %q", got)
+	}
+	if err := setKeychainMarker(dir, keychainHoldFile, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := passphraseFor(dir, true); got != "" {
+		t.Fatalf("held: %q", got)
+	}
+	if got := passphraseFor(dir, false); got != "pass phrase" {
+		t.Fatalf("explicit unlock should ignore the hold: %q", got)
+	}
+	t.Setenv("CERVUS_NO_KEYCHAIN", "1")
+	if got := passphraseFor(dir, false); got != "" {
+		t.Fatalf("env: %q", got)
+	}
+}
+
+func TestKeychainEnableRefusedByEnvironment(t *testing.T) {
+	calls := fakeSecretTool(t)
+	t.Setenv("CERVUS_NO_KEYCHAIN", "1")
+	err := keychainEnable(t.TempDir(), []string{"--yes"})
+	if err == nil || !strings.Contains(err.Error(), "CERVUS_NO_KEYCHAIN") || len(*calls) != 0 {
+		t.Fatalf("err=%v calls=%v", err, *calls)
+	}
+}

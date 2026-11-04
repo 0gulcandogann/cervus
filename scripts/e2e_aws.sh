@@ -240,28 +240,25 @@ unset AWS_CONFIG_FILE CERVUS_SESSION_OWNER
   [ "$(grep -c 'role/IdleRole' "$LOG")" = "$N" ] && ok "a locked vault does not call AWS" || bad "idle: AWS call while locked"
   echo "$PASS" | cv unlock >/dev/null
   cv credential-process | grep -q ASIAROLEIdleRole && ok "credentials work again after unlock" || bad "idle: after unlock"
-  kill "$IDLE" 2>/dev/null
-  exit "$FAILS"
-)
-FAILS=$((FAILS + $?))
 
-# --- a stored passphrase lets the AWS tools work on a locked vault
-mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
-(
+  # A stored passphrase reopens the vault after an idle lock, but not after an explicit one.
+  mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
+  export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring"
+  [ "$(command -v secret-tool)" = "$T/fakebin/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
   unset CERVUS_NO_KEYCHAIN
-  export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring" CERVUS_SESSION=shell-kc
-  cv use dev >/dev/null 2>&1
-  cv lock >/dev/null
-  cv credential-process 2>&1 | grep -qi "locked" && ok "without a stored passphrase credential-process reports locked" || bad "kc: locked"
   echo "$PASS" | cv keychain enable --yes >/dev/null 2>&1
+  sleep 4
+  cv credential-process </dev/null 2>&1 | grep -q ASIAROLEIdleRole && ok "credential-process reopens after an idle lock with a stored passphrase" || bad "kc: after idle lock"
   cv lock >/dev/null
-  cv credential-process </dev/null 2>&1 | grep -q ASIAROLEDevTwo && ok "credential-process unlocks from the keychain" || bad "kc: credential-process"
-  cv lock >/dev/null
-  cv use dev </dev/null >/dev/null 2>&1 && ok "use unlocks from the keychain" || bad "kc: use"
+  cv credential-process </dev/null 2>&1 | grep -qi "locked" && ok "an explicit lock holds against credential-process" || bad "kc: explicit lock"
+  cv use idlerole </dev/null 2>&1 | grep -qi "locked" && ok "an explicit lock holds against use" || bad "kc: use after lock"
+  cv unlock </dev/null >/dev/null 2>&1
+  cv credential-process </dev/null 2>&1 | grep -q ASIAROLEIdleRole && ok "cervus unlock ends the hold" || bad "kc: after unlock"
   cv keychain disable >/dev/null
-  exit "$FAILS"
+  kill "$IDLE" 2>/dev/null
+  exit $((FAILS > 0))
 )
-FAILS=$((FAILS + $?))
+[ $? = 0 ] || FAILS=$((FAILS+1))
 
 # --- audit log
 echo "$PASS" | cv unlock >/dev/null 2>&1

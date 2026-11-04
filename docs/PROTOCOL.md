@@ -21,7 +21,7 @@ Binary values (secrets) are base64 strings.
 | `ping` | none | `ping` |
 | `status` | none | `status` |
 | `init` | `{passphrase}` | `init` |
-| `unlock` | `{passphrase}` | `unlock` |
+| `unlock` | `{passphrase, source?}` (`source: "keychain"` is client-claimed and goes to the audit log) | `unlock` |
 | `recover` | `{recovery_key, passphrase, drop_local?}` | `recover` |
 | `lock` | none | `lock` |
 | `passwd` | `{current, new}` | `change_passphrase` |
@@ -50,6 +50,7 @@ AWS operations are handled by the daemon itself (they use the vault internally a
 | `use` | `{session, role, confirmed?, pid?}` (`pid` also registers the shell, for one the daemon has forgotten) | `{role, expires_at}` |
 | `credentials` | `{session}` | AWS `credential_process` JSON (Version 1) |
 | `whoami` | `{session}` | `{role, expires_at, seconds_left, protected}` |
+| `keychain.event` | `{action}` (`enabled` or `disabled`; audit log only) | `{}` |
 | `session.register` | `{session, pid}` (daemon forgets the session when the PID exits) | `{}` |
 
 | `audit.tail` | `{n}` | `{lines: [string]}` |
