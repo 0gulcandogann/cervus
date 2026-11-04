@@ -2,31 +2,120 @@
 
 ![A glowing white deer leaping through a dark forest, trailing light that spells Cervus](docs/assets/banner.jpg)
 
-Encrypted AWS secrets and role switching for your terminal. Run it once; it stays in the background.
+**Encrypted AWS credentials and instant role switching for your terminal.** Set it up once, then press `Alt+r` to move between your AWS roles, users and vaults.
 
-> Status: pre-release (v0.0.6). The vault and the AWS role/MFA flow work and are tested against a fake STS server and passed one limited real-AWS test pass on Linux. MFA enrollment by QR and the OS keychain are not built. Do not use it for production credentials until it has had a full real-AWS test pass and an independent security review.
+> **Pre-release.** Cervus has not had an independent security review, and only part of it has been tried on real AWS. Do not use it with production credentials yet. See [Status](#status).
 
-## What works today
+## Why
 
-- Several vaults: one per AWS user if you want, each with its own passphrase and recovery key. `cervus vault create <name>`, `identity add --vault <name>` or `--own-vault`, `identity move <name> --vault <other>`. The `Alt+r` list shows every role and user with its vault, and asks only for the passphrase of the vault it needs. Without `--vault`, `secret` commands use `$CERVUS_VAULT`, then the active role's vault, then the default one; `secret rm` asks you to name the vault rather than follow the active role. A `user:<name>` entry is as strict as that user's strictest role. When upgrading, restart `cervusd`: an older daemon ignores `--vault`.
-- Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
-- AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
-- One command on one role: `cervus exec prod -- terraform plan` runs in its own session, so switching roles in the shell does not move it. No credentials go into its environment.
-- Optional keychain: `cervus keychain enable` stores the passphrase in the Linux Secret Service, so the vault reopens by itself after an idle lock. It is off by default; read the trade-off in Known limitations first.
-- Changing things later: `identity update --rotate-key` replaces a key without touching its roles or MFA seed, `role edit` changes only the settings you name, and `passwd` changes the passphrase.
-- Roles: `role add` with `--mfa none|once|always`, `--confirm`, `--duration`. `once` fetches one MFA-backed session token and assumes roles from it; `always` uses a fresh code every time.
-- Per-shell sessions: `CERVUS_SESSION=<id> cervus use <role>`. Two shells can hold two roles.
-- Shell integration: `cervus init-shell zsh --install` (or bash). Each shell gets its own session, `Alt+r` opens a role picker, and an optional prompt segment shows `[role 45m]` (green, red for protected roles, yellow when expired). Sessions of closed shells are cleaned up.
-- `cervus migrate`: moves plaintext keys from `~/.aws/credentials` into the vault (each key is checked with AWS and read back before the plaintext is removed) and imports role profiles from `~/.aws/config`.
-- `cervus doctor`: checks the login service, permissions, plaintext leftovers, the AWS profile, shell setup and missing MFA seeds, and tells you the fix for each.
-- `cervus install-service` / `uninstall-service`: run `cervusd` at login as a systemd user unit. A launchd agent is generated on macOS, but its behavior is unverified. The vault stays locked until you unlock it.
-- `cervus recover`: lost your passphrase? The recovery key re-encrypts synced secrets for a new device key (device-only secrets such as MFA seeds cannot be recovered).
-- `cervus audit` / `cervus audit verify`: hash-chained log of security events (never contains secrets). Lives next to `config.json`.
-- AWS CLI integration: `cervus aws-profile --install` adds a profile whose `credential_process` is `cervus credential-process`. Credentials stay in daemon memory and are refreshed before expiry.
+- **No plaintext keys.** Access keys and MFA seeds live in encrypted [age](https://age-encryption.org) files, not in `~/.aws/credentials`.
+- **Each shell has its own role.** One terminal can be on `dev` and another on `prod`, and the prompt shows which is which.
+- **No keys in your environment.** The AWS CLI asks Cervus through `credential_process`, and short-lived credentials stay in the daemon's memory.
+- **Separate vaults when you want them.** A user can have its own vault, passphrase and recovery key.
+- **Local only.** No account, no cloud service and no telemetry. It only talks to AWS.
+
+## Quick start
+
+Get a [release](#install) or [build from source](#build-and-test), then run:
+
+```sh
+cervus                       # sets up the daemon, a vault, the AWS profile and your shell; asks before each change
+exec $SHELL                  # a running shell cannot gain a shortcut by itself; new terminals work right away
+cervus identity add work     # asks for an access key and checks it with AWS
+cervus role add dev --identity work --arn arn:aws:iam::123456789012:role/Dev
+```
+
+Press `Alt+r`, pick a role, and use AWS as usual:
+
+```sh
+aws sts get-caller-identity
+```
+
+Already have keys in `~/.aws/credentials`? `cervus migrate` moves them into the vault. It checks each key before removing the plaintext.
+
+## Everyday use
+
+| You want to | Run |
+|---|---|
+| Switch role, user or vault | `Alt+r`, or `cervus use dev` |
+| Use a user directly, without a role | `cervus use user:work` |
+| Pin one command to a role | `cervus exec prod -- terraform plan` |
+| See where you are | `cervus whoami` |
+| Check your setup | `cervus doctor` |
+| Lock everything now | `cervus lock` |
+| Use another key for the picker | `cervus keybinding alt+s` |
+
+In the picker, use `j`/`k` or the arrows, `Enter` or a number to choose, and `q` to cancel. The prompt shows `[dev 45m]`: the role and the minutes left, in red for protected roles.
+
+Prefer `cervus exec` for anything long-running. A plain command follows its shell's role, so `Alt+r` can move it at its next credential refresh.
+
+### Roles and MFA
+
+```sh
+cervus identity add work --region eu-west-1 --mfa-serial arn:aws:iam::123456789012:mfa/me
+cervus identity mfa-import work     # paste the base32 seed; it stays on this device
+cervus role add prod --identity work --arn arn:aws:iam::123456789012:role/Prod --mfa always --confirm
+```
+
+| `--mfa` | Behavior |
+|---|---|
+| `none` | No MFA code |
+| `once` | One MFA-backed session token, reused for this user's roles |
+| `always` | A fresh code each time credentials are issued |
+
+`--confirm` asks before switching to the role. The vault computes MFA codes itself, so this protects against mistakes, not against malware running as you.
+
+### Several vaults
+
+Everything starts in a default vault. Give a user its own vault only when you want one:
+
+```sh
+cervus identity add client --own-vault     # new vault named "client", with its own passphrase and recovery key
+cervus vault create personal               # or make one first
+cervus identity add me --vault personal
+cervus identity move me --vault client     # carries the key and MFA seed across
+cervus vault list
+```
+
+The picker shows each entry's vault. If that vault is locked, it asks for that vault's passphrase only. `cervus lock` locks all vaults; `cervus lock --vault client` locks one.
+
+Roles of the same user share a vault, because they share its access key and MFA seed. To isolate a sensitive role, give it a different IAM user in its own vault.
+
+### Other secrets
+
+```sh
+cervus secret put api-token                # goes to your active role's vault; it tells you which
+cervus secret put --vault personal note
+cervus secret get api-token
+cervus secret list
+cervus secret rm --vault personal note
+```
+
+Without `--vault`, `get`, `put` and `list` use `$CERVUS_VAULT`, then the active role's vault, then the default one. `rm` asks you to name the vault rather than follow the active role. Access keys and MFA seeds cannot be read or changed this way.
+
+### Changing things later
+
+| Change | Run |
+|---|---|
+| Replace an access key; roles and MFA seed stay | `cervus identity update work --rotate-key` |
+| Change a role's settings | `cervus role edit dev --mfa always` |
+| Change a passphrase | `cervus passwd [--vault V]` |
+| Lost a passphrase | `cervus recover [--vault V]` |
+| Read or check the audit log | `cervus audit`, `cervus audit verify` |
+
+Run `cervus help` for every command. After upgrading, restart `cervusd`: an older daemon ignores `--vault`.
+
+### Optional: fewer passphrase prompts
+
+`cervus keychain enable` keeps a vault's passphrase in the Linux Secret Service, using libsecret's `secret-tool`. It is off by default, so read this first:
+
+- While your login keyring is open, often the whole session, any program running as you can read the passphrase and open the vault, MFA-protected roles included.
+- The vault reopens by itself after an idle lock. After `cervus lock` it stays locked until `cervus unlock`.
+- `cervus keychain disable` cannot undo a leak. If the passphrase may have been read, run `cervus recover` and rotate your secrets.
 
 ## Install
 
-Download a pre-release for your platform (`linux-amd64`, `linux-arm64`, `darwin-arm64`, `darwin-amd64`), and keep the three programs in one folder:
+Release archives are available for `linux-amd64`, `linux-arm64`, `darwin-arm64` and `darwin-amd64`. Keep the three programs in one folder:
 
 ```sh
 V=0.0.6 P=linux-amd64
@@ -36,83 +125,80 @@ tar -xzf "cervus-$V-$P.tar.gz"
 export PATH="$PWD/cervus-$V-$P:$PATH"
 ```
 
-The Linux builds need glibc 2.34 or newer. The macOS builds have never been run and are not notarized. To build from source instead, see below.
+**v0.0.6 is older than this README.** Several vaults, `cervus` setup, `keybinding`, `keychain` and the `user:` entries are only in the source for now.
 
-## Try it
+Linux builds need glibc 2.34 or newer. Only the Linux amd64 build has been run. The macOS builds have never been run and are not notarized.
 
-```sh
-cervus                   # sets up the daemon, a vault, the AWS profile and the shell; asks before each change
-exec $SHELL              # a running shell cannot pick up a key by itself; new terminals work right away
-cervus identity add work --region eu-west-1      # --own-vault gives this user its own vault
-# press Alt+r to switch between roles, users and vaults
-```
+## Security model
 
-To change the key: `cervus keybinding alt+s` or `cervus keybinding ctrl+g`, then open a new terminal.
+Cervus protects against a stolen disk or backup, plaintext keys left lying around, and other users on the machine. Your secrets are encrypted at rest, and the daemon's socket only accepts your own user.
 
-Or step by step:
+It does **not** protect against a program running as you:
 
-```sh
-cervus install-service   # starts cervusd now and at every login (or run `cervusd &` by hand)
-cervus init
-cervus identity add work --region eu-west-1 --mfa-serial arn:aws:iam::<acct>:mfa/<name>
-cervus identity mfa-import work                      # paste the base32 seed
-cervus role add dev  --identity work --arn arn:aws:iam::<acct>:role/Dev
-cervus role add prod --identity work --arn arn:aws:iam::<acct>:role/Prod --mfa always --confirm
-cervus aws-profile --install
-cervus init-shell zsh --prompt --install     # or bash; then open a new terminal
-# press Alt+r to pick a role, or: cervus use dev
-aws sts get-caller-identity
-```
+- While a vault is unlocked, such a program can use the daemon to get credentials.
+- It can edit `config.json` or replace vault files, because those files are not authenticated.
+- Blocking `secret get` and `put` for keys stops direct reads and accidents. It does not make the vault tamper-proof.
 
-## Architecture
+Also worth knowing:
+
+- Role and user names, ARNs and each user's vault are readable in `config.json`. Secret names are visible as file names.
+- Go cannot wipe memory, so secrets passing through the daemon are not erased.
+- The audit log never contains secrets. It detects edits in the middle but not a cut-off end, and it can be rewritten by a program running as you.
+- `passwd` does not undo a leak: an old copy of a vault still opens with the old passphrase. After a leak, run `cervus recover` and rotate your secrets.
+- MFA seeds are device-only. A recovery key cannot restore them, so import them again after `cervus recover`.
+
+## How it works
 
 ```
-cervus (CLI) --> cervusd (Go daemon) --stdio pipe--> cervus-vault (Rust child)
- aws CLI --credential_process--^   |                  age crypto, TOTP, zeroized keys
+cervus (CLI) --> cervusd (Go daemon) --stdio pipe--> cervus-vault (Rust, one process per vault)
+ aws CLI --credential_process--^   |                  age encryption, TOTP, idle auto-lock
                                    +--> AWS STS (own SigV4 client, no SDK)
 ```
 
-| Binary | Language | Role |
+| Program | Language | Role |
 |---|---|---|
-| `cervus` | Go | CLI client, `credential-process` helper |
+| `cervus` | Go | Command line, shell integration, `credential_process` helper |
 | `cervusd` | Go | Daemon: sessions, credential cache and refresh, STS calls, allowlisted API |
 | `cervus-vault` | Rust | Encryption, key handling, TOTP, idle auto-lock |
 
-The vault has no socket on disk; only the daemon can reach it. See `docs/PROTOCOL.md`.
+A vault has no socket on disk, so only the daemon can reach it. Idle lock defaults to 4 hours and also drops that vault's cached credentials. `cervus install-service` runs the daemon at login as a systemd user unit. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
+`cervus exec` pins a command only while it runs. Background children left behind lose the role, so keep the command in the foreground (`nohup cervus exec ...`). A daemon restart, or removing or retargeting the role, also ends it: the command gets an error at its next refresh and must be restarted.
 
 ## Build and test
 
-Requirements: Go 1.22+, Rust 1.74+, Python 3.
+Needs Go 1.22+, Rust 1.74+ and Python 3. The shell tests also use zsh if it is installed.
 
 ```sh
 make build && export PATH="$PWD/bin:$PATH"
-make test     # unit tests + 4 end-to-end suites (vault, AWS with a fake STS, migrate/doctor, shell in a pty); ~3 minutes
+make test        # unit tests and 5 end-to-end suites against a fake STS, a few minutes
+make test-dist   # builds and checks a release archive
 ```
 
-The AWS signer is checked against the official AWS SigV4 example, and TOTP against the RFC 6238 vectors. The fake STS recomputes TOTP independently, so MFA codes are cross-checked.
+The AWS signer is checked against the official AWS SigV4 example, and TOTP against the RFC 6238 vectors.
 
-## Known limitations
+## Status
 
-- Real-AWS testing is partial: role switching with and without MFA and `credential_process` passed on Linux; credential refresh, `cervus migrate` and the shell picker have not been tried there. In one test AWS rejected a reused TOTP code, and Cervus refuses to reuse a code and tells you how long to wait.
-- MFA enrollment by QR code is not built yet; import an existing seed instead.
-- The picker and prompt are tested with bash 5.2 and zsh 5.9 in a pseudo-terminal, not in macOS Terminal, iTerm2 or with oh-my-zsh themes. In zsh the segment is added to `RPROMPT`; in bash it is prefixed to `PS1` and refreshes after the next command. On macOS, `Alt+r` needs "Use Option as Meta key" in your terminal.
-- The device key is protected by a passphrase. `cervus keychain enable` can keep it in the Linux Secret Service (needs libsecret's `secret-tool`), which removes most prompts. It is off by default, and nothing runs `secret-tool` until you opt in. While your login keyring is open, often the whole session, any program running as you can then read the passphrase and open the vault, including for MFA-protected roles, and `keychain disable` cannot undo a leak. The vault reopens by itself after an idle lock; after `cervus lock` it stays locked until `cervus unlock`. macOS Keychain is not built. `CERVUS_NO_KEYCHAIN=1` turns the feature off in that environment, as the tests do.
-- macOS code paths (peer UID check, ptrace denial) are untested.
-- Go cannot zeroize memory; secrets passing through the daemon are not wiped.
-- The audit log detects edits and deletions in the middle, but not truncation of its end.
-- A role belongs to the shell, not the command: a long-running command started in a shell follows that shell's role at its next credential refresh, so `Alt+r` can move it. Use `cervus exec` for anything that keeps running.
-- `cervus exec` pins a command only while that command runs. It ends when the started process exits, so background children it leaves behind lose the role; keep the command in the foreground, as in `nohup cervus exec ...`. A daemon restart, or removing or retargeting the role, also ends it: the command fails at its next credential refresh and must be restarted. These cases fail with an error instead of switching roles. A command that runs `cervus use` itself changes its own session.
-- A program running as your user is outside the protection boundary. It can edit `config.json`, replace vault files (they are not authenticated), or use the daemon while the vault is unlocked. Blocking `secret get` and `put` for keys stops direct reads and accidents; it does not make the vault tamper-proof.
-- `passwd` does not undo a leaked passphrase: an old copy of the vault still opens with the old one. After a leak, run `cervus recover` and rotate your secrets.
-- Roles of the same user share a vault, because they share its access key and MFA seed. To isolate a sensitive role, give it a different IAM user in its own vault. Role and user names, ARNs and which vault each user is in stay readable in `config.json`.
-- Secret names are visible as file names. Removing a git recipient does not hide old history; rotate the secret.
+| Area | State |
+|---|---|
+| Automated tests | Pass on Linux with bash and zsh, using a fake STS. CI also runs unit tests on macOS |
+| Real AWS, Linux | One limited pass: signing, `mfa none\|once\|always`, an MFA-conditioned role, `credential_process`. AWS rejected a reused MFA code once; Cervus refuses to reuse one |
+| Not tried on real AWS | Credential refresh, `migrate`, the picker, several vaults, key rotation, `exec` |
+| Login service | Checked on real systemd, without an actual log out and log in |
+| Terminals | Picker checked in kitty with zsh; bash and zsh in a pseudo-terminal. oh-my-zsh themes untested |
+| macOS | Never run beyond unit tests: launchd, peer check and `Alt+r` are unverified. `Alt+r` will likely need "Use Option as Meta key" |
+| Security review | None yet; required before 1.0 |
 
 ## Roadmap
 
-1. Done: vault core.
-2. Done (mock-tested): identities, roles, TOTP, per-shell sessions, credential_process.
-3. Partly done: real-AWS test pass (see Known limitations); fixes.
-4. Done (tested in a pty): shell hook, Alt+r picker, prompt segment, session cleanup.
-5. Done: plaintext key migration, `cervus doctor`, recovery flow, audit log. Open: MFA enrollment with QR.
-6. OS keychain backend, git sync helpers and pre-push guard.
-7. Hardening, audit log, independent security review.
+- Finish real-AWS testing
+- Encrypt role ARNs and MFA serials
+- MFA enrollment from the CLI
+- macOS: Keychain and peer check
+- IAM Identity Center (SSO)
+- Hardening and fuzz tests
+- Independent security review
+
+## License
+
+[MIT](LICENSE)
