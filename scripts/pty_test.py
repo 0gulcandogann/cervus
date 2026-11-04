@@ -223,6 +223,17 @@ def main():
         seg = t2.run("'%s' whoami" % CERVUS, "N2") or ""
         ok("%s: the second shell has no role yet" % name) if "no role selected" in seg else bad("%s: isolation" % name, seg)
         t2.close()
+        # a changed key really opens the picker, and the old one does not
+        t3 = Term(argv)
+        for cmd in setup: t3.run(cmd)
+        t3.run("eval \"$('%s' init-shell %s --key alt+t)\"" % (CERVUS, name))
+        t3.send("\x1bt")
+        seg = t3.expect("Switch role")
+        ok("%s: a changed key opens the picker" % name) if seg else bad("%s: changed key" % name, t3.tail())
+        t3.send("q"); t3.expect("cancelled")
+        t3.send("\x1br"); t3.pump(1)
+        ok("%s: the old key no longer opens it" % name) if "Switch role" not in t3.tail() else bad("%s: old key still bound" % name, t3.tail())
+        t3.close()
         # closing the first shell must clean up its session in the daemon
         before = cervus("whoami", session=sid)
         t.close()

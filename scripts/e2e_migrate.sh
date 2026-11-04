@@ -129,6 +129,33 @@ grep -q 'enable cervusd.service' "$T/systemctl.log" && ok "service is enabled" |
 cv doctor 2>&1 | grep -q "login service is installed and running" && ok "doctor reports the running service" || bad "doctor service state"
 cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service removes the unit" || bad "uninstall unit"
 [ -d "$T/vault" ] && ok "uninstall-service keeps the vault" || bad "uninstall vault"
+
+# --- cervus setup does everything once, and only once
+(
+  unset CERVUS_SOCKET AWS_PROFILE
+  export HOME="$T/fresh" SHELL=/bin/zsh AWS_CONFIG_FILE="$T/fresh/awsconfig" AWS_SHARED_CREDENTIALS_FILE="$T/fresh/awscreds"
+  mkdir -p "$HOME"; rm -f "$T/svc.pid"
+  cv setup </dev/null 2>&1 | grep -q -- "--yes" && [ ! -e "$HOME/.zshrc" ] && ok "setup without a terminal needs --yes and changes nothing" || bad "setup needs --yes"
+  printf 'setup test passphrase\nsetup test passphrase\n' | cv setup --yes > "$T/setup.txt" 2>&1 && ok "setup succeeds" || bad "setup: $(tail -3 "$T/setup.txt")"
+  grep -q 'restart cervusd.service' "$T/systemctl.log" && ok "setup starts the service" || bad "setup service"
+  cv status | grep -q unlocked && ok "setup creates the vault" || bad "setup vault"
+  grep -q "RECOVERY KEY" "$T/setup.txt" && ok "setup shows the recovery key" || bad "setup recovery key"
+  grep -q '^\[profile cervus\]' "$AWS_CONFIG_FILE" && ok "setup adds the AWS profile" || bad "setup profile"
+  grep -q '# cervus' "$HOME/.zshrc" && grep -q -- '--prompt' "$HOME/.zshrc" && ok "setup adds the shell integration" || bad "setup shell"
+  grep -q "Alt+r" "$T/setup.txt" && grep -q "exec zsh" "$T/setup.txt" && ok "setup says how to use it in this terminal" || bad "setup final note"
+  grep -q "identity add" "$T/setup.txt" && ok "setup points to adding a user" || bad "setup next step"
+  cp "$HOME/.zshrc" "$T/rc1"; cp "$AWS_CONFIG_FILE" "$T/cfg1"
+  cv setup --yes </dev/null > "$T/setup2.txt" 2>&1 && ok "a second setup succeeds" || bad "setup twice: $(tail -3 "$T/setup2.txt")"
+  cmp -s "$HOME/.zshrc" "$T/rc1" && cmp -s "$AWS_CONFIG_FILE" "$T/cfg1" && ok "a second setup changes nothing" || bad "setup not idempotent"
+  cv keybinding | grep -q "alt+r" && ok "the default key is alt+r" || bad "keybinding default"
+  cv keybinding ctrl+c 2>&1 | grep -qi "cannot be used\|must be" && ok "an unsafe key is refused" || bad "keybinding unsafe"
+  cv keybinding alt+t >/dev/null && cv keybinding | grep -q "alt+t" && ok "the key can be changed" || bad "keybinding set"
+  cv init-shell zsh | grep -q "bindkey '^\[t'" && ok "new shells use the changed key" || bad "init-shell key"
+  cv init-shell bash --key alt+y | grep -q '"\\ey"' && ok "init-shell --key overrides it" || bad "init-shell --key"
+  cv uninstall-service >/dev/null 2>&1
+  exit $((FAILS > 0))
+)
+[ $? = 0 ] || FAILS=$((FAILS+1))
 export PATH=$SAVED_PATH
 export XDG_RUNTIME_DIR=$SAVED_XDG
 

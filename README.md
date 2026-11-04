@@ -8,6 +8,7 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 
 ## What works today
 
+- Several vaults: one per AWS user if you want, each with its own passphrase and recovery key. `cervus vault create <name>`, `identity add --vault <name>` or `--own-vault`, `identity move <name> --vault <other>`. The `Alt+r` list shows every role and user with its vault, and asks only for the passphrase of the vault it needs. Without `--vault`, `secret` commands use `$CERVUS_VAULT`, then the active role's vault, then the default one.
 - Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
 - AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
 - One command on one role: `cervus exec prod -- terraform plan` runs in its own session, so switching roles in the shell does not move it. No credentials go into its environment.
@@ -38,6 +39,17 @@ export PATH="$PWD/cervus-$V-$P:$PATH"
 The Linux builds need glibc 2.34 or newer. The macOS builds have never been run and are not notarized. To build from source instead, see below.
 
 ## Try it
+
+```sh
+cervus                   # sets up the daemon, a vault, the AWS profile and the shell; asks before each change
+exec $SHELL              # a running shell cannot pick up a key by itself; new terminals work right away
+cervus identity add work --region eu-west-1      # --own-vault gives this user its own vault
+# press Alt+r to switch between roles, users and vaults
+```
+
+To change the key: `cervus keybinding alt+s` or `cervus keybinding ctrl+g`, then open a new terminal.
+
+Or step by step:
 
 ```sh
 cervus install-service   # starts cervusd now and at every login (or run `cervusd &` by hand)
@@ -92,6 +104,7 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - `cervus exec` pins a command only while that command runs. It ends when the started process exits, so background children it leaves behind lose the role; keep the command in the foreground, as in `nohup cervus exec ...`. A daemon restart, or removing or retargeting the role, also ends it: the command fails at its next credential refresh and must be restarted. These cases fail with an error instead of switching roles. A command that runs `cervus use` itself changes its own session.
 - A program running as your user is outside the protection boundary. It can edit `config.json`, replace vault files (they are not authenticated), or use the daemon while the vault is unlocked. Blocking `secret get` and `put` for keys stops direct reads and accidents; it does not make the vault tamper-proof.
 - `passwd` does not undo a leaked passphrase: an old copy of the vault still opens with the old one. After a leak, run `cervus recover` and rotate your secrets.
+- Roles of the same user share a vault, because they share its access key and MFA seed. To isolate a sensitive role, give it a different IAM user in its own vault. Role and user names, ARNs and which vault each user is in stay readable in `config.json`.
 - Secret names are visible as file names. Removing a git recipient does not hide old history; rotate the secret.
 
 ## Roadmap

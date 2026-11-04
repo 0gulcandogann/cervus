@@ -29,14 +29,26 @@ var stdin = bufio.NewReader(os.Stdin)
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+		if !isTTY(os.Stdin) {
+			usage()
+			os.Exit(2)
+		}
+		// Just `cervus` in a terminal: get the machine ready, or say that it already is.
+		if err := cmdSetup(nil); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	args := os.Args[2:]
 	var err error
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("cervus", version)
+	case "setup":
+		err = cmdSetup(args)
+	case "keybinding":
+		err = cmdKeybinding(args)
 	case "help", "-h", "--help":
 		usage()
 	case "status":
@@ -1015,6 +1027,8 @@ func usage() {
 	fmt.Print(`cervus - encrypted AWS secrets and role switching for your terminal
 
 Vault:
+  setup [--yes]              Get this machine ready (also what cervus alone does in a terminal)
+  keybinding [key]           Show or change the role picker's key (default alt+r)
   init                       Create the default vault (passphrase + recovery key)
   vault create <n> | list    More vaults, each with its own passphrase and recovery key
   unlock | lock | status     Unlock, lock or inspect the vault
@@ -1041,7 +1055,7 @@ AWS:
   use [role|user:<n>] [--yes]  Switch this shell to a role or user (no argument opens the picker)
   exec <role> [--yes] -- <cmd>  Run one command pinned to a role, in its own session
   pick                       Interactive role picker (bound to Alt+r by init-shell)
-  init-shell <zsh|bash> [--prompt] [--install]
+  init-shell <zsh|bash> [--prompt] [--install] [--key K]
                              Shell integration: per-shell session, Alt+r, prompt segment
   whoami                     Show the current role and time left
   audit [-n N] | audit verify  Show recent security events; check the log was not tampered with

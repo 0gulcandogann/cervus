@@ -333,7 +333,7 @@ if [[ -o interactive ]]; then
     zle reset-prompt
   }
   zle -N _cervus_pick_widget
-  bindkey '^[r' _cervus_pick_widget
+  bindkey '@@ZSH_KEY@@' _cervus_pick_widget
 fi
 `
 
@@ -357,7 +357,7 @@ if [[ $- == *i* ]]; then
   _cervus_pick() { "$_cervus_bin" pick; }
   bind -x '"\C-x\C-p": _cervus_pick'
   bind '"\C-x\C-r": redraw-current-line'
-  bind '"\er": "\C-x\C-p\C-x\C-r"'
+  bind '"@@BASH_KEY@@": "\C-x\C-p\C-x\C-r"'
 fi
 `
 
@@ -370,6 +370,7 @@ func cmdInitShell(args []string) error {
 	fs := flag.NewFlagSet("init-shell", flag.ContinueOnError)
 	prompt := fs.Bool("prompt", false, "also show the current role in the prompt")
 	install := fs.Bool("install", false, "append the integration to your shell rc file")
+	keyFlag := fs.String("key", "", "key for the role picker, e.g. alt+r (default: the one set by cervus keybinding)")
 	shell, err := parseWithName(fs, args, "usage: cervus init-shell <zsh|bash> [--prompt] [--install]")
 	if err != nil {
 		return err
@@ -397,7 +398,18 @@ func cmdInitShell(args []string) error {
 	default:
 		return fmt.Errorf("unsupported shell %q (use zsh or bash)", shell)
 	}
-	script = strings.ReplaceAll(script, "@@BIN@@", shellQuote(exe))
+	key := currentShellKey()
+	if *keyFlag != "" {
+		if key, err = parseShellKey(*keyFlag); err != nil {
+			return err
+		}
+		if *install { // the installed line re-reads the setting in every new shell
+			if err := saveShellKey(key); err != nil {
+				return err
+			}
+		}
+	}
+	script = renderShellScript(strings.ReplaceAll(script, "@@BIN@@", shellQuote(exe)), key)
 	if !*install {
 		fmt.Print(script)
 		return nil
@@ -420,6 +432,6 @@ func cmdInitShell(args []string) error {
 	if _, err := io.WriteString(f, "\n"+line+"\n"); err != nil {
 		return err
 	}
-	fmt.Printf("Added to %s. Open a new terminal; press Alt+r to switch roles.\n", rc)
+	fmt.Printf("Added to %s. Open a new terminal; press %s to switch roles.\n", rc, key.label())
 	return nil
 }
