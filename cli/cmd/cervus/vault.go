@@ -64,12 +64,20 @@ func secretVault(flagValue string) string {
 	if v := os.Getenv("CERVUS_VAULT"); v != "" {
 		return v
 	}
+	v := activeRoleVault()
+	if v != "" {
+		fmt.Fprintf(os.Stderr, "(vault: %s, from the active role)\n", v)
+	}
+	return v
+}
+
+// activeRoleVault returns the vault of this shell's role, or "" for none or the default vault.
+func activeRoleVault() string {
 	var who struct {
 		Vault string `json:"vault"`
 	}
-	if client.Call("whoami", map[string]string{"session": sessionID()}, &who) != nil || who.Vault == "" || who.Vault == "default" {
+	if client.Call("whoami", map[string]string{"session": sessionID()}, &who) != nil || who.Vault == "default" {
 		return ""
 	}
-	fmt.Fprintf(os.Stderr, "(vault: %s, from the active role)\n", who.Vault)
 	return who.Vault
 }

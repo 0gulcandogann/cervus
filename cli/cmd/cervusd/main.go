@@ -221,9 +221,6 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 		}
 		return outResponse{ID: req.ID, OK: true, Data: b}
 	}
-	if req.Op == "lock" || req.Op == "recover" {
-		app.clearCaches()
-	}
 	vop, ok := publicToVault[req.Op]
 	if !ok {
 		return fail(req.ID, "unknown_op", fmt.Sprintf("unknown op %q", req.Op))
@@ -240,9 +237,14 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 		for _, sup := range app.vaults.running() {
 			_, _, _ = sup.Call(vop, params)
 		}
+		app.clearCaches()
 		return outResponse{ID: req.ID, OK: true, Data: json.RawMessage(`{"locked":true}`)}
 	}
-	sup, name, verr := app.vaults.get(vaultName)
+	open := app.vaults.open
+	if req.Op == "init" { // the only operation that may name a vault that does not exist yet
+		open = app.vaults.get
+	}
+	sup, name, verr := open(vaultName)
 	if verr != nil {
 		return outResponse{ID: req.ID, Error: verr}
 	}
@@ -252,6 +254,9 @@ func handleRequest(line []byte, app *app, reqOut *inRequest) outResponse {
 		}
 	}
 	data, rerr, err := sup.Call(vop, params)
+	if req.Op == "lock" || (req.Op == "recover" && err == nil && rerr == nil) {
+		app.clearVaultCaches(name) // a failed lock still counts: a vault that cannot answer is locked
+	}
 	switch {
 	case errors.Is(err, vaultproc.ErrUnavailable):
 		return fail(req.ID, "internal", "vault process crashed and was reset; it is locked, try again")

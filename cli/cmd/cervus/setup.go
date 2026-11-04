@@ -113,11 +113,15 @@ func cmdSetup(args []string) error {
 			return false, fmt.Errorf("setup needs to change something (%s); re-run in a terminal or with --yes", question)
 		}
 		fmt.Printf("%s [Y/n] ", question)
-		line, _ := stdin.ReadString('\n')
+		line, err := stdin.ReadString('\n')
+		if err != nil { // Ctrl-D or a closed terminal is no answer, so it is not a yes
+			fmt.Println()
+			return false, nil
+		}
 		a := strings.ToLower(strings.TrimSpace(line))
 		return a == "" || a == "y" || a == "yes", nil
 	}
-	changed := false
+	changed, declined := false, false
 
 	if !daemonReachable(client.SocketPath()) {
 		ok, err := confirm("Start the Cervus daemon now and at every login?")
@@ -150,6 +154,8 @@ func cmdSetup(args []string) error {
 				return err
 			}
 			changed = true
+		} else {
+			declined = true
 		}
 	}
 
@@ -166,6 +172,8 @@ func cmdSetup(args []string) error {
 				return err
 			}
 			changed = true
+		} else {
+			declined = true
 		}
 	} else if self, err := os.Executable(); err == nil {
 		if err := checkCervusProfile(cfgData, credsData, cfgPath, credsPath, self); err != nil {
@@ -174,12 +182,14 @@ func cmdSetup(args []string) error {
 	}
 
 	shell := filepath.Base(os.Getenv("SHELL"))
+	keyReady := false
 	reload := "open a new terminal"
 	if shell == "zsh" || shell == "bash" {
 		reload = "run `exec " + shell + "` here, or open a new terminal"
-		rc := filepath.Join(home, "."+shell+"rc")
+		rc := shellRC(shell, home)
 		existing, _ := os.ReadFile(rc)
-		if !strings.Contains(string(existing), "# cervus") {
+		keyReady = shellIntegrationInstalled(string(existing))
+		if !keyReady {
 			ok, err := confirm("Add role switching to " + rc + "?")
 			if err != nil {
 				return err
@@ -188,14 +198,16 @@ func cmdSetup(args []string) error {
 				if err := cmdInitShell([]string{shell, "--prompt", "--install"}); err != nil {
 					return err
 				}
-				changed = true
+				changed, keyReady = true, true
+			} else {
+				declined = true
 			}
 		}
 	} else {
 		fmt.Printf("Shell %q is not supported yet; only zsh and bash have role switching.\n", shell)
 	}
 
-	if !changed {
+	if !changed && !declined && keyReady {
 		fmt.Println("Everything is already set up.")
 	}
 	var users struct {
@@ -214,9 +226,34 @@ func cmdSetup(args []string) error {
 	if len(users.Identities) == 0 {
 		fmt.Println("Add your first AWS user: cervus identity add <name>   (--own-vault gives it its own vault)")
 	}
+	if !keyReady {
+		fmt.Println("The picker key is not set up in this shell, so there is no shortcut yet. Run `cervus setup` to add it, or use `cervus use <role>`.")
+		return nil
+	}
 	if os.Getenv("CERVUS_SESSION_OWNER") == "" {
 		fmt.Printf("A running shell cannot pick up a new key by itself: %s.\n", reload)
 	}
 	fmt.Printf("Then press %s to switch between your roles, users and vaults.\n", currentShellKey().label())
 	return nil
+}
+
+// shellRC is the file a shell reads at startup; zsh looks in $ZDOTDIR when it is set.
+func shellRC(shell, home string) string {
+	if shell == "zsh" {
+		if dir := os.Getenv("ZDOTDIR"); dir != "" {
+			return filepath.Join(dir, ".zshrc")
+		}
+	}
+	return filepath.Join(home, "."+shell+"rc")
+}
+
+// shellIntegrationInstalled looks for the exact line --install writes, not any mention of Cervus.
+func shellIntegrationInstalled(rc string) bool {
+	for _, line := range strings.Split(rc, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") && strings.Contains(line, "init-shell") && strings.HasSuffix(line, "# cervus") {
+			return true
+		}
+	}
+	return false
 }

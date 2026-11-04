@@ -152,6 +152,25 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   cv keybinding alt+t >/dev/null && cv keybinding | grep -q "alt+t" && ok "the key can be changed" || bad "keybinding set"
   cv init-shell zsh | grep -q "bindkey '^\[t'" && ok "new shells use the changed key" || bad "init-shell key"
   cv init-shell bash --key alt+y | grep -q '"\\ey"' && ok "init-shell --key overrides it" || bad "init-shell --key"
+  cv keybinding alt+r >/dev/null
+
+  # Answers on a real terminal. The service and vault exist; only the profile and shell are left.
+  TTY() { python3 -I "$HERE/setup_tty_test.py" "$B/cervus" "$1"; }
+  rm -f "$AWS_CONFIG_FILE" "$HOME/.zshrc"
+  TTY nn > "$T/s.txt" 2>&1
+  [ ! -e "$AWS_CONFIG_FILE" ] && [ ! -e "$HOME/.zshrc" ] && ok "answering no changes nothing" || bad "setup no"
+  grep -q "already set up" "$T/s.txt" && bad "declining was reported as set up" || ok "declining is not reported as set up"
+  grep -q "to switch" "$T/s.txt" && bad "Alt+r promised after declining" || ok "no key is promised after declining"
+  TTY dd > "$T/s.txt" 2>&1
+  [ ! -e "$AWS_CONFIG_FILE" ] && [ ! -e "$HOME/.zshrc" ] && ok "Ctrl-D changes nothing" || bad "setup Ctrl-D"
+  printf '# cervus is a thing I read about\n' > "$HOME/.zshrc"
+  TTY ee > "$T/s.txt" 2>&1
+  grep -q '^\[profile cervus\]' "$AWS_CONFIG_FILE" && ok "Enter accepts" || bad "setup Enter"
+  grep -q 'init-shell' "$HOME/.zshrc" && ok "a comment mentioning cervus does not count as installed" || bad "setup comment"
+  grep -q "Alt+r to switch" "$T/s.txt" && ok "the key is promised once it is installed" || bad "setup promise"
+  mkdir -p "$T/zd"; ZDOTDIR="$T/zd" cv init-shell zsh --install >/dev/null 2>&1; grep -q 'init-shell' "$T/zd/.zshrc" && ok "ZDOTDIR is honored" || bad "ZDOTDIR"
+  SHELL=/usr/bin/fish cv setup --yes </dev/null > "$T/s.txt" 2>&1
+  grep -q "not supported" "$T/s.txt" && ! grep -q "to switch" "$T/s.txt" && ok "an unsupported shell gets no key promise" || bad "setup fish"
   cv uninstall-service >/dev/null 2>&1
   exit $((FAILS > 0))
 )

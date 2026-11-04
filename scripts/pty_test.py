@@ -156,6 +156,22 @@ def test_shell(name, argv, setup=()):
     ok("%s: the picker switches to a user" % name) if seg else bad("%s: picker user" % name, t.tail())
     t.run("'%s' use beta >/dev/null" % CERVUS, "M9")
 
+    # a wrong passphrase in the picker must be reported, not swallowed by the prompt redraw
+    cervus("lock", "--vault", "other")
+    t.send("\x1br"); t.expect("Switch role")
+    t.send("4")
+    t.expect("Passphrase:")
+    t.send("not the right passphrase\r")
+    seg = t.expect("wrong passphrase")
+    ok("%s: the picker reports a wrong passphrase" % name) if seg else bad("%s: picker wrong passphrase" % name, t.tail())
+    t.run("true", "M10")
+    t.send("\x1br"); t.expect("Switch role")
+    t.send("4")
+    t.expect("Passphrase:")
+    t.send("other vault passphrase\r")
+    t.expect('Now using role "zeta"')
+    t.run("'%s' use beta >/dev/null" % CERVUS, "M11")
+
     # cervus exec on a terminal with a locked vault: ask, then run; a wrong passphrase runs nothing
     awscfg = os.path.join(os.path.dirname(os.environ["CERVUS_SOCKET"]), "aws-config")
     with open(awscfg, "w") as f:

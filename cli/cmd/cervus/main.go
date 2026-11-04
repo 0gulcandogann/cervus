@@ -480,7 +480,15 @@ func cmdSecret(args []string) error {
 		if err != nil {
 			return err
 		}
-		return client.Call("secret.delete", vaultArg(map[string]string{"name": name}, secretVault(*vault)), nil)
+		target := *vault
+		if target == "" {
+			target = os.Getenv("CERVUS_VAULT")
+		}
+		// Deleting must not depend on which role this shell happens to be on.
+		if implied := activeRoleVault(); target == "" && implied != "" {
+			return fmt.Errorf("this shell's role uses vault %q; say which vault: cervus secret rm --vault %s %s", implied, implied, name)
+		}
+		return client.Call("secret.delete", vaultArg(map[string]string{"name": name}, target), nil)
 	}
 	return fmt.Errorf("unknown secret command %q", args[0])
 }
@@ -514,20 +522,36 @@ func cmdIdentity(args []string) error {
 		if err != nil {
 			return err
 		}
-		if *ownVault {
-			if err := createVault(id); err != nil {
-				return err
-			}
-			*vault = id
-		}
 		var out struct {
 			Arn     string `json:"arn"`
 			Account string `json:"account"`
 		}
-		err = client.Call("identity.add", map[string]any{
+		params := map[string]any{
 			"id": id, "region": *region, "mfa_serial": *serial, "vault": *vault,
 			"access_key_id": keyID, "secret_access_key": secret, "verify": !*noVerify,
-		}, &out)
+		}
+		if *ownVault {
+			// Everything that can fail comes first, so a mistake leaves no empty vault behind.
+			var list vaultListing
+			if err := client.Call("vault.list", nil, &list); err != nil {
+				return err
+			}
+			for _, v := range list.Vaults {
+				if v.Name == id && v.Initialized {
+					return fmt.Errorf("vault %q already exists; to use it: cervus identity add %s --vault %s", id, id, id)
+				}
+			}
+			params["vault"], params["dry_run"] = id, true
+			if err := client.Call("identity.add", params, &out); err != nil {
+				return err
+			}
+			if err := createVault(id); err != nil {
+				return err
+			}
+			delete(params, "dry_run")
+			params["verify"] = false // just checked
+		}
+		err = client.Call("identity.add", params, &out)
 		if err != nil {
 			return err
 		}
@@ -1031,10 +1055,10 @@ Vault:
   keybinding [key]           Show or change the role picker's key (default alt+r)
   init                       Create the default vault (passphrase + recovery key)
   vault create <n> | list    More vaults, each with its own passphrase and recovery key
-  unlock | lock | status     Unlock, lock or inspect the vault
-  passwd                     Change the passphrase
+  unlock | lock | status     Unlock, lock or inspect the vault (unlock and lock take --vault V; lock alone locks all)
+  passwd [--vault V]         Change the passphrase
   keychain enable|disable|status   Keep the passphrase in the OS keychain (Linux, optional)
-  recover [--drop-local]     Lost your passphrase? Reset it with the recovery key
+  recover [--drop-local] [--vault V]   Lost your passphrase? Reset it with the recovery key
   secret put [--vault V] [--local] <n>   Store a secret (value from stdin)
                              Without --vault: $CERVUS_VAULT, the active role's vault, else default
   secret get [-n] <n>        Print a secret to stdout

@@ -22,6 +22,7 @@ func fakeSecretTool(t *testing.T) *[]string {
 }
 
 func TestKeychainCommandsNameTheVaultAndKeepSecretsOutOfArgs(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
 	calls := fakeSecretTool(t)
 	if err := keychainStore("/v", "pass phrase"); err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func TestKeychainDisabledByEnvironment(t *testing.T) {
 }
 
 func TestPassphraseForNeedsOptInAndRespectsAHold(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
 	dir := t.TempDir()
 	calls := fakeSecretTool(t)
 	if got := passphraseFor(dir, true); got != "" || len(*calls) != 0 {

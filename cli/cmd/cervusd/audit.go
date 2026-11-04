@@ -171,7 +171,7 @@ var auditedOps = map[string][]string{
 	"lock":                {"vault"},
 	"passwd":              {"vault"},
 	"recover":             {"drop_local", "vault"},
-	"identity.add":        {"id", "region", "vault"},
+	"identity.add":        {"id", "region", "vault", "dry_run"},
 	"identity.move":       {"id", "vault"},
 	"identity.update":     {"id", "region", "mfa_serial", "rotate", "verify", "allow_different_principal"},
 	"identity.remove":     {"id"},

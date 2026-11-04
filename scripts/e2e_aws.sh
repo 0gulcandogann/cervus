@@ -195,7 +195,8 @@ printf '[profile cervus]\n' > "$AWS_CONFIG_FILE"
 cv exec dev -- touch "$T/ran" 2>&1 | grep -q "credential_process" && [ ! -e "$T/ran" ] && ok "exec refuses a profile that cannot give it the role" || bad "exec empty profile"
 printf '[profile cervus]\ncredential_process = %s credential-process\n' "$(cd "$B" && pwd)/cervus" > "$AWS_CONFIG_FILE"
 export CERVUS_SESSION=shell-exec CERVUS_SESSION_OWNER=
-cv use stage2 >/dev/null 2>&1
+cv role add execshell --identity work --arn arn:aws:iam::123456789012:role/ExecShell >/dev/null
+cv use execshell >/dev/null 2>&1
 OUT=$(AWS_ACCESS_KEY_ID=leftover AWS_SECRET_ACCESS_KEY=leftover cv exec dev -- sh -c 'echo "S=$CERVUS_SESSION P=$AWS_PROFILE K=${AWS_ACCESS_KEY_ID:-none} O=$CERVUS_SESSION_OWNER SELF=$$"; "$0" credential-process' "$B/cervus")
 echo "$OUT" | grep -q "P=cervus K=none" && ok "exec sets the profile and clears leftover keys" || bad "exec environment"
 echo "$OUT" | grep -q ASIAROLEDevTwo && ok "the command gets the role's credentials" || bad "exec credentials"
@@ -203,7 +204,7 @@ SID=$(echo "$OUT" | sed -n 's/^S=\([^ ]*\) .*/\1/p')
 [ -n "$SID" ] && [ "$SID" != shell-exec ] && ok "exec uses its own session" || bad "exec session"
 OWNER=$(echo "$OUT" | sed -n 's/.* O=\([0-9]*\) .*/\1/p'); SELF=$(echo "$OUT" | sed -n 's/.* SELF=\([0-9]*\)$/\1/p')
 [ "$OWNER" = "$SELF" ] && ok "the command itself owns the session" || bad "exec owner"
-cv whoami | grep -q "role stage2" && ok "exec leaves the shell's role alone" || bad "exec shell role"
+cv whoami | grep -q "role execshell" && ok "exec leaves the shell's role alone" || bad "exec shell role"
 cv exec dev -- sh -c 'sleep 2; "$0" credential-process' "$B/cervus" > "$T/pin.txt" 2>&1 & PINNED=$!
 sleep 0.5; cv use short >/dev/null 2>&1; wait "$PINNED"
 grep -q ASIAROLEDevTwo "$T/pin.txt" && ok "switching the shell does not move a running exec" || bad "exec pinned"

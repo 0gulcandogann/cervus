@@ -8,7 +8,7 @@ Encrypted AWS secrets and role switching for your terminal. Run it once; it stay
 
 ## What works today
 
-- Several vaults: one per AWS user if you want, each with its own passphrase and recovery key. `cervus vault create <name>`, `identity add --vault <name>` or `--own-vault`, `identity move <name> --vault <other>`. The `Alt+r` list shows every role and user with its vault, and asks only for the passphrase of the vault it needs. Without `--vault`, `secret` commands use `$CERVUS_VAULT`, then the active role's vault, then the default one.
+- Several vaults: one per AWS user if you want, each with its own passphrase and recovery key. `cervus vault create <name>`, `identity add --vault <name>` or `--own-vault`, `identity move <name> --vault <other>`. The `Alt+r` list shows every role and user with its vault, and asks only for the passphrase of the vault it needs. Without `--vault`, `secret` commands use `$CERVUS_VAULT`, then the active role's vault, then the default one; `secret rm` asks you to name the vault rather than follow the active role. A `user:<name>` entry is as strict as that user's strictest role. When upgrading, restart `cervusd`: an older daemon ignores `--vault`.
 - Encrypted vault (age): `init`, `unlock`/`lock`, `secret put|get|list|rm`, recovery key, idle auto-lock, crash-safe supervision.
 - AWS identities: `identity add` stores an IAM access key in the vault (checked with `GetCallerIdentity`). `identity mfa-import` stores a virtual-MFA seed device-only; the vault computes TOTP codes.
 - One command on one role: `cervus exec prod -- terraform plan` runs in its own session, so switching roles in the shell does not move it. No credentials go into its environment.

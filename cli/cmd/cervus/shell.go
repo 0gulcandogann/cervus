@@ -141,11 +141,19 @@ func cmdPick() error {
 		items = append(items, roleItem{r.Name, r.Identity, r.Vault, r.MFA, r.Confirm})
 	}
 	for _, u := range users.Identities {
-		mfa := "none"
+		mfa, protected := "none", false
 		if u.MFASerial != "" {
 			mfa = "once"
 		}
-		items = append(items, roleItem{"user:" + u.Name, u.Name, u.Vault, mfa, false})
+		for _, r := range list.Roles { // a user is as strict as its strictest role
+			if r.Identity == u.Name {
+				protected = protected || r.Confirm
+				if r.MFA == "always" {
+					mfa = "always"
+				}
+			}
+		}
+		items = append(items, roleItem{"user:" + u.Name, u.Name, u.Vault, mfa, protected})
 	}
 	selected := 0
 	for i, it := range items {
@@ -244,7 +252,7 @@ loop:
 	}
 	erase()
 	if choice < 0 {
-		fmt.Fprint(tty, "cancelled\r\n")
+		fmt.Println("cancelled")
 		return nil
 	}
 
@@ -262,10 +270,11 @@ loop:
 	}
 	res, err := switchRole(items[choice].Name, false, confirm, ask)
 	if err != nil {
-		fmt.Fprintf(tty, "error: %v\r\n", err)
+		fmt.Printf("error: %v\n", err)
 		return nil
 	}
-	fmt.Fprintf(tty, "Now using role %q (valid until %s)\r\n", res.Role, res.ExpiresAt)
+	// The outcome goes to stdout, not the terminal, so the zsh widget can keep it visible.
+	fmt.Printf("Now using role %q (valid until %s)\n", res.Role, res.ExpiresAt)
 	return nil
 }
 
@@ -328,9 +337,12 @@ export AWS_PROFILE=cervus
 if [[ -o interactive ]]; then
   _cervus_pick_widget() {
     zle -I
-    "$_cervus_bin" pick
+    # A redrawn prompt can erase what was printed above it, so the result goes in zsh's message area.
+    local msg
+    msg="$("$_cervus_bin" pick 2>&1)"
     (( $+functions[_cervus_precmd] )) && _cervus_precmd
     zle reset-prompt
+    [[ -n "$msg" ]] && zle -M "$msg"
   }
   zle -N _cervus_pick_widget
   bindkey '@@ZSH_KEY@@' _cervus_pick_widget
@@ -386,12 +398,12 @@ func cmdInitShell(args []string) error {
 	home, _ := os.UserHomeDir()
 	switch shell {
 	case "zsh":
-		script, rc = zshScript, filepath.Join(home, ".zshrc")
+		script, rc = zshScript, shellRC("zsh", home)
 		if *prompt {
 			script += zshPrompt
 		}
 	case "bash":
-		script, rc = bashScript, filepath.Join(home, ".bashrc")
+		script, rc = bashScript, shellRC("bash", home)
 		if *prompt {
 			script += bashPrompt
 		}
@@ -421,7 +433,7 @@ func cmdInitShell(args []string) error {
 	}
 	line += ")\" # cervus"
 	existing, _ := os.ReadFile(rc)
-	if strings.Contains(string(existing), "# cervus") {
+	if shellIntegrationInstalled(string(existing)) {
 		return fmt.Errorf("%s already contains a cervus line; edit it by hand to change options", rc)
 	}
 	f, err := os.OpenFile(rc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

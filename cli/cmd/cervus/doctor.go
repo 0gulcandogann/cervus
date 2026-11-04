@@ -190,8 +190,8 @@ func cmdDoctor() error {
 	} else {
 		home, _ := os.UserHomeDir()
 		found := false
-		for _, rc := range []string{".zshrc", ".bashrc"} {
-			if b, err := os.ReadFile(filepath.Join(home, rc)); err == nil && strings.Contains(string(b), "# cervus") {
+		for _, shell := range []string{"zsh", "bash"} {
+			if b, err := os.ReadFile(shellRC(shell, home)); err == nil && shellIntegrationInstalled(string(b)) {
 				found = true
 			}
 		}

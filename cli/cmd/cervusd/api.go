@@ -72,7 +72,6 @@ func (a *app) clearCaches() {
 func (a *app) clearCachesLocked() {
 	a.roleCache = map[string]awsapi.Credentials{}
 	a.identTok = map[string]awsapi.Credentials{}
-	a.lastCode = map[string]string{}
 }
 
 type handler func(a *app, params json.RawMessage) (any, *apiErr)
@@ -220,7 +219,7 @@ func (a *app) sessionRegister(params json.RawMessage) (any, *apiErr) {
 // ---- vault helpers ----
 
 func (a *app) vaultCall(vault, op string, params any) (json.RawMessage, *apiErr) {
-	sup, name, e := a.vaults.get(vault)
+	sup, name, e := a.vaults.open(vault)
 	if e != nil {
 		return nil, e
 	}
@@ -449,6 +448,7 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 		AccessKeyID     string `json:"access_key_id"`
 		SecretAccessKey string `json:"secret_access_key"`
 		Verify          *bool  `json:"verify"`
+		DryRun          bool   `json:"dry_run"` // check everything, store nothing
 	}
 	if e := parse(params, &p); e != nil {
 		return nil, e
@@ -460,6 +460,9 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 	ident := config.Identity{Region: p.Region, MFASerial: p.MFASerial}
 	if vault != defaultVault {
 		ident.Vault = vault
+	}
+	if !p.DryRun && !a.vaults.exists(vault) {
+		return nil, fe("not_found", "no vault named %q; create it with `cervus vault create %s`", vault, vault)
 	}
 	if err := ident.Validate(p.ID); err != nil {
 		return nil, fe("bad_request", "%v", err)
@@ -486,6 +489,9 @@ func (a *app) identityAdd(params json.RawMessage) (any, *apiErr) {
 			return nil, awsErr(err)
 		}
 		res["arn"], res["account"] = arn, account
+	}
+	if p.DryRun {
+		return res, nil
 	}
 	blob, _ := json.Marshal(accessKey{AccessKeyID: p.AccessKeyID, SecretAccessKey: p.SecretAccessKey})
 	if e := a.vaultPut(ident.Vault, "aws-key."+p.ID, "aws_access_key", "synced", blob); e != nil {
@@ -779,6 +785,9 @@ func (a *app) roleAdd(params json.RawMessage) (any, *apiErr) {
 	if err := cfg.Save(a.cfgPath); err != nil {
 		return nil, fe("internal", "%v", err)
 	}
+	if r.Confirm {
+		a.takeSessionsOffUser(r.Identity)
+	}
 	return map[string]any{}, nil
 }
 
@@ -846,6 +855,10 @@ func (a *app) roleEdit(params json.RawMessage) (any, *apiErr) {
 				removed++
 			}
 		}
+	}
+	delete(a.roleCache, userRolePrefix+r.Identity)
+	if r.Confirm && !old.Confirm {
+		removed += a.takeSessionsOffUser(r.Identity)
 	}
 	return map[string]any{"shells_removed": removed}, nil
 }

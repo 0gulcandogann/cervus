@@ -65,6 +65,27 @@ func (s *vaultSet) get(name string) (*vaultproc.Supervisor, string, *apiErr) {
 	return sup, name, nil
 }
 
+// open is get for a vault that must already exist, so a mistyped name is an error instead of a new
+// process that says "not initialized". The default vault always counts: `cervus init` makes it.
+func (s *vaultSet) open(name string) (*vaultproc.Supervisor, string, *apiErr) {
+	normal, e := normalizeVault(name)
+	if e != nil {
+		return nil, "", e
+	}
+	if !s.exists(normal) {
+		return nil, "", fe("not_found", "no vault named %q; create it with `cervus vault create %s`", normal, normal)
+	}
+	return s.get(normal)
+}
+
+func (s *vaultSet) exists(name string) bool {
+	if name == defaultVault {
+		return true
+	}
+	st, err := os.Stat(s.dir(name))
+	return err == nil && st.IsDir()
+}
+
 // names lists the default vault and every vault folder on disk.
 func (s *vaultSet) names() []string {
 	out := []string{defaultVault}
@@ -146,17 +167,29 @@ const userRolePrefix = "user:"
 // resolveRole finds a configured role, or the implicit role of a user: "user:<identity>" uses the
 // identity itself, so a user can be switched to without defining a role. Colons are not allowed in
 // role names, so the two cannot collide.
+//
+// The implicit role takes the strictest settings of that user's roles, so it is no way around a
+// confirmation or a fresh MFA code. A user with an MFA device always uses it.
 func resolveRole(name string, cfg *config.Config) (config.Role, bool) {
 	if id, ok := strings.CutPrefix(name, userRolePrefix); ok {
 		ident, ok := cfg.Identities[id]
 		if !ok {
 			return config.Role{}, false
 		}
-		mfa := "none"
+		r := config.Role{Identity: id, MFA: "none"}
 		if ident.MFASerial != "" {
-			mfa = "once"
+			r.MFA = "once"
 		}
-		return config.Role{Identity: id, MFA: mfa}, true
+		for _, other := range cfg.Roles {
+			if other.Identity != id {
+				continue
+			}
+			r.Confirm = r.Confirm || other.Confirm
+			if other.MFA == "always" {
+				r.MFA = "always"
+			}
+		}
+		return r, true
 	}
 	r, ok := cfg.Roles[name]
 	return r, ok
@@ -262,6 +295,36 @@ func (a *app) identityMove(params json.RawMessage) (any, *apiErr) {
 		}
 	}
 	return map[string]any{"vault": target}, nil
+}
+
+// clearVaultCaches drops the cached credentials of one vault's users; the others are not affected.
+func (a *app) clearVaultCaches(vault string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg, e := a.loadCfg()
+	if e != nil {
+		a.clearCachesLocked()
+		return
+	}
+	for id, ident := range cfg.Identities {
+		if vaultDisplay(ident.Vault) == vault {
+			a.forgetIdentity(id, cfg)
+		}
+	}
+}
+
+// takeSessionsOffUser ends shells on a user's implicit role when one of its roles gains a confirmation.
+// Caller holds a.mu. It returns how many shells it affected.
+func (a *app) takeSessionsOffUser(id string) int {
+	delete(a.roleCache, userRolePrefix+id)
+	removed := 0
+	for s, r := range a.sessions {
+		if r == userRolePrefix+id {
+			delete(a.sessions, s)
+			removed++
+		}
+	}
+	return removed
 }
 
 // forgetIdentity drops everything cached for a user. Caller holds a.mu.
