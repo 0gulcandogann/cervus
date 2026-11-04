@@ -6,3 +6,8 @@ dist/
 .local/
 .superpowers/
 CLAUDE.local.md
+
+# Notes for AI assistants; kept locally, not part of the tool
+CLAUDE.md
+docs/HANDOFF.md
+docs/superpowers/
