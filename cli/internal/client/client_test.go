@@ -16,7 +16,13 @@ func noRuntimeDir(t *testing.T) string {
 	t.Setenv("HOME", home)
 	old := runUserBase
 	t.Cleanup(func() { runUserBase = old })
-	runUserBase = t.TempDir()
+	// Socket paths have a short limit (104 bytes on macOS), and t.TempDir can exceed it there.
+	base, err := os.MkdirTemp("/tmp", "cervus-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	runUserBase = base
 	return home
 }
 

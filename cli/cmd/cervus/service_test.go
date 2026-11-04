@@ -239,7 +239,12 @@ func TestInstallWritesUnitAndEnables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `ExecStart="`+filepath.Join(e.dir, "cervusd")+`"`) {
+	// serviceDaemonPath resolves symlinks, and macOS temp dirs live behind one.
+	dir, err := filepath.EvalSymlinks(e.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `ExecStart="`+filepath.Join(dir, "cervusd")+`"`) {
 		t.Fatalf("wrong unit:\n%s", b)
 	}
 	want := []string{
