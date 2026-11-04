@@ -40,6 +40,8 @@ Other useful skills if installed: `dataviz` not needed; `anthropic-skills:docs` 
 ```sh
 make build          # vault (cargo) + cli (go) into ./bin
 make test           # unit tests + 4 e2e suites, ~3 min
+make dist           # release archive for this machine into ./dist
+make test-dist      # checks that archive
 BIN=./bin bash scripts/e2e.sh          # vault + recovery
 BIN=./bin bash scripts/e2e_aws.sh      # identities, roles, MFA, audit (fake STS; waits for a TOTP window)
 BIN=./bin bash scripts/e2e_migrate.sh  # migrate + doctor

@@ -1,5 +1,6 @@
 vault/target/
 bin/
+dist/
 *.log
 .DS_Store
 .local/
