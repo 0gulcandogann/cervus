@@ -4,7 +4,7 @@
 
 **Encrypted AWS credentials and instant role switching for your terminal.** Set it up once, then press `Alt+r` to move between your AWS roles, users and vaults.
 
-> **Pre-release.** Cervus has not had an independent security review, and only part of it has been tried on real AWS. Do not use it with production credentials yet. See [Status](#status).
+> **Pre-release.** Cervus has not had an independent security review, and only part of it has been tried on real AWS. Do not use it with production credentials yet.
 
 ## Why
 
@@ -174,18 +174,6 @@ make test-dist   # builds and checks a release archive
 ```
 
 The AWS signer is checked against the official AWS SigV4 example, and TOTP against the RFC 6238 vectors.
-
-## Status
-
-| Area | State |
-|---|---|
-| Automated tests | Pass on Linux with bash and zsh, using a fake STS. CI also runs unit tests on macOS |
-| Real AWS, Linux | One limited pass: signing, `mfa none\|once\|always`, an MFA-conditioned role, `credential_process`. AWS rejected a reused MFA code once; Cervus refuses to reuse one |
-| Not tried on real AWS | Credential refresh, `migrate`, the picker, several vaults, key rotation, `exec` |
-| Login service | Checked on real systemd, without an actual log out and log in |
-| Terminals | Picker checked in kitty with zsh; bash and zsh in a pseudo-terminal. oh-my-zsh themes untested |
-| macOS | Never run beyond unit tests: launchd, peer check and `Alt+r` are unverified. `Alt+r` will likely need "Use Option as Meta key" |
-| Security review | None yet; required before 1.0 |
 
 ## Roadmap
 
