@@ -43,8 +43,14 @@ while time.time() < end:
 print(KEY.sub("[recovery key]", out))
 if replies:
     print("UNANSWERED: " + replies[0][0])
+# A child that closed its terminal may need a moment to exit. One still running after that is
+# waiting for an answer nobody will give.
+grace = time.time() + 5
 done, status = os.waitpid(pid, os.WNOHANG)
-if done == 0:  # still waiting for an answer nobody will give
+while done == 0 and time.time() < grace:
+    time.sleep(0.05)
+    done, status = os.waitpid(pid, os.WNOHANG)
+if done == 0:
     os.kill(pid, signal.SIGKILL)
     os.waitpid(pid, 0)
     print("STILL RUNNING AT THE TIMEOUT")
