@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-// Both pictures are cut from docs/assets/banner.jpg: the cloud of light with the banner's own lettering
+// Both pictures come from the project's first banner image: the cloud of light with the banner's own lettering
 // painted out, and the brightness of the deer's white fur.
 var (
 	//go:embed banner_cloud.jpg

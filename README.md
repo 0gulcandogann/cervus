@@ -1,6 +1,6 @@
 # Cervus
 
-![A glowing white deer leaping through a dark forest, trailing light that spells Cervus](docs/assets/banner.jpg)
+![Cervus: a white deer and a blue cloud of light with the Cervus wordmark, as drawn in the terminal](docs/assets/cervus-banner.png)
 
 **Encrypted AWS credentials and instant role switching for your terminal.** Set it up once, then press `Alt+r` to move between your roles and users. No desktop app, no browser extension, no cloud service: your keys stay encrypted on your machine.
 
@@ -133,11 +133,7 @@ tar -xzf "cervus-$V-$P.tar.gz"
 export PATH="$PWD/cervus-$V-$P:$PATH"
 ```
 
-Then run `cervus`. It opens like this and asks before each change. It copies the three programs to `~/.local/share/cervus` and links `~/.local/bin/cervus`, so you can delete the downloaded folder afterwards:
-
-![Running cervus: a white deer and a blue cloud of light with the Cervus wordmark, followed by the first setup question](docs/assets/setup.gif)
-
-<sub>The real first run, stopped at its first question. Without 24-bit color you get the plain wordmark.</sub>
+Then run `cervus`. It asks before each change. It copies the three programs to `~/.local/share/cervus` and links `~/.local/bin/cervus`, so you can delete the downloaded folder afterwards:
 
 To update, do the same with the new version. To remove the programs, run `cervus uninstall-service`, then delete `~/.local/share/cervus` and `~/.local/bin/cervus`. Your vaults in `~/.cervus` stay until you delete them too.
 
