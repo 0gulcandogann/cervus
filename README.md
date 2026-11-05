@@ -2,7 +2,11 @@
 
 ![A glowing white deer leaping through a dark forest, trailing light that spells Cervus](docs/assets/banner.jpg)
 
-**Encrypted AWS credentials and instant role switching for your terminal.** Set it up once, then press `Alt+r` to move between your AWS roles, users and vaults.
+**Encrypted AWS credentials and instant role switching for your terminal.** Set it up once, then press `Alt+r` to move between your roles and users. No desktop app, no browser extension, no cloud service: your keys stay encrypted on your machine.
+
+![Pressing Alt+r three times to switch between the dev, staging and prod roles, with aws sts get-caller-identity showing the new role each time](docs/assets/demo.gif)
+
+<sub>Recorded from the real CLI and AWS CLI against a fake STS and a made-up account, with the vault already unlocked.</sub>
 
 > **Pre-release.** Cervus has not had an independent security review, and only part of it has been tried on real AWS. Do not use it with production credentials yet.
 
@@ -128,6 +132,12 @@ gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # opti
 tar -xzf "cervus-$V-$P.tar.gz"
 export PATH="$PWD/cervus-$V-$P:$PATH"
 ```
+
+Then run `cervus` to set it up. It opens like this and asks before each change:
+
+![Running cervus: a white deer and a blue cloud of light with the Cervus wordmark, followed by the first setup question](docs/assets/setup.gif)
+
+<sub>The real first run, stopped at its first question. Without 24-bit color you get the plain wordmark.</sub>
 
 Linux builds need glibc 2.34 or newer. Only the Linux amd64 build has been run. The macOS builds have never been run and are not notarized.
 
