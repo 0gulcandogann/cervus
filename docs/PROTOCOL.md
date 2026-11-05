@@ -49,6 +49,9 @@ AWS operations are handled by the daemon itself (they use the vault internally a
 | `identity.verify_key` | `{id, access_key_id, secret_access_key}` (compares with the stored key) | `{match}` |
 | `identity.mfa_import` | `{id, seed}` (base32; stored device-only) | `{mfa_serial_configured}` |
 | `identity.mfa_setup` | `{id, device_name?, show_seed?}` (waits up to 30 seconds) | `{mfa_serial, user, seed?}` |
+| `identity.add_sso` | `{id, start_url, sso_region, account, role_name, region?, vault?}` | `{}` |
+| `identity.sso_start` | `{id}` | `{verification_uri, user_code, interval, expires_in}` |
+| `identity.sso_poll` | `{id}` | `{status: pending\|slow_down\|done, expires_in?}` |
 | `role.add` | `{name, identity, arn?, region?, mfa?: "none"\|"once"\|"always", confirm?, duration_secs?}` | `{}` |
 | `role.edit` | `{name, identity?, arn?, region?, mfa?, confirm?, duration_secs?}` (only the given fields change; a new target or new confirmation takes shells off the role) | `{shells_removed}` |
 | `role.list` / `role.remove` | none / `{name}` | `{roles}` / `{}` |

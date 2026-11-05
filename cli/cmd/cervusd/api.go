@@ -48,6 +48,8 @@ type app struct {
 	roleCache map[string]awsapi.Credentials
 	identTok  map[string]awsapi.Credentials
 	lastCode  map[string]string
+	ssoCreds  map[string]awsapi.Credentials
+	ssoLogins map[string]ssoPending
 }
 
 func newApp(v *vaultSet, cfgPath, stsEndpoint string) *app {
@@ -58,6 +60,8 @@ func newApp(v *vaultSet, cfgPath, stsEndpoint string) *app {
 		roleCache: map[string]awsapi.Credentials{},
 		identTok:  map[string]awsapi.Credentials{},
 		lastCode:  map[string]string{},
+		ssoCreds:  map[string]awsapi.Credentials{},
+		ssoLogins: map[string]ssoPending{},
 	}
 }
 
@@ -72,6 +76,7 @@ func (a *app) clearCaches() {
 func (a *app) clearCachesLocked() {
 	a.roleCache = map[string]awsapi.Credentials{}
 	a.identTok = map[string]awsapi.Credentials{}
+	a.ssoCreds = map[string]awsapi.Credentials{}
 }
 
 type handler func(a *app, params json.RawMessage) (any, *apiErr)
@@ -86,6 +91,9 @@ var apiHandlers = map[string]handler{
 	"identity.verify_key": (*app).identityVerifyKey,
 	"identity.mfa_import": (*app).identityMFAImport,
 	"identity.mfa_setup":  (*app).identityMFASetup,
+	"identity.add_sso":    (*app).identityAddSSO,
+	"identity.sso_start":  (*app).identitySSOStart,
+	"identity.sso_poll":   (*app).identitySSOPoll,
 	"role.add":            (*app).roleAdd,
 	"role.list":           (*app).roleList,
 	"role.edit":           (*app).roleEdit,
@@ -155,7 +163,7 @@ func pidAlive(pid int) bool {
 // idle and comes back locked after a crash, and does not tell the daemon. A vault that cannot answer
 // counts as locked, and so does everything if the config cannot be read. Caller holds a.mu.
 func (a *app) dropCachesIfLocked() {
-	if len(a.roleCache) == 0 && len(a.identTok) == 0 {
+	if len(a.roleCache) == 0 && len(a.identTok) == 0 && len(a.ssoCreds) == 0 {
 		return
 	}
 	cfg, e := a.loadCfg()
@@ -371,7 +379,13 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 		dur = defaultDuration
 	}
 
-	base, e := a.longTermCreds(ident.Vault, role.Identity)
+	var base awsapi.Credentials
+	var e *apiErr
+	if ident.SSO != nil {
+		base, e = a.ssoBase(role.Identity, ident)
+	} else {
+		base, e = a.longTermCreds(ident.Vault, role.Identity)
+	}
 	if e != nil {
 		return awsapi.Credentials{}, e
 	}
@@ -379,6 +393,8 @@ func (a *app) getCreds(roleName string, cfg *config.Config) (awsapi.Credentials,
 	var creds awsapi.Credentials
 	var err error
 	switch {
+	case ident.SSO != nil && role.ARN == "":
+		creds = base // these are already session credentials, and cannot ask for another session
 	case role.ARN == "" && role.MFA == "once":
 		c, e := a.identitySession(role.Identity, ident, base)
 		if e != nil {
@@ -514,6 +530,7 @@ func (a *app) identityList(params json.RawMessage) (any, *apiErr) {
 		Name      string `json:"name"`
 		Region    string `json:"region,omitempty"`
 		MFASerial string `json:"mfa_serial,omitempty"`
+		SSO       bool   `json:"sso,omitempty"`
 		Vault     string `json:"vault"`
 	}
 	var out []item
@@ -522,7 +539,7 @@ func (a *app) identityList(params json.RawMessage) (any, *apiErr) {
 		if vault == "" {
 			vault = defaultVault
 		}
-		out = append(out, item{n, i.Region, i.MFASerial, vault})
+		out = append(out, item{n, i.Region, i.MFASerial, i.SSO != nil, vault})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return map[string]any{"identities": out}, nil
@@ -561,6 +578,11 @@ func (a *app) identityUpdate(params json.RawMessage) (any, *apiErr) {
 	ident, ok := cfg.Identities[p.ID]
 	if !ok {
 		return nil, fe("not_found", "unknown identity %q", p.ID)
+	}
+	if p.Rotate || p.MFASerial != nil {
+		if e := notForSSO(ident, p.ID, "access key or MFA device"); e != nil {
+			return nil, e
+		}
 	}
 	if p.Region != nil {
 		ident.Region = *p.Region
@@ -673,6 +695,9 @@ func (a *app) identityVerifyKey(params json.RawMessage) (any, *apiErr) {
 	if e != nil {
 		return nil, e
 	}
+	if e := notForSSO(cfg.Identities[p.ID], p.ID, "access key"); e != nil {
+		return nil, e
+	}
 	stored, e := a.longTermCreds(cfg.Identities[p.ID].Vault, p.ID)
 	if e != nil {
 		return nil, e
@@ -704,6 +729,9 @@ func (a *app) identityMFAImport(params json.RawMessage) (any, *apiErr) {
 	if !ok {
 		return nil, fe("not_found", "unknown identity %q", p.ID)
 	}
+	if e := notForSSO(ident, p.ID, "MFA seed"); e != nil {
+		return nil, e
+	}
 	if e := a.vaultPut(ident.Vault, "mfa-seed."+p.ID, "mfa_seed", "local", []byte(seed)); e != nil {
 		return nil, e
 	}
@@ -734,7 +762,7 @@ func (a *app) identityRemove(params json.RawMessage) (any, *apiErr) {
 			return nil, fe("bad_request", "role %q still uses identity %q; remove it first", n, p.ID)
 		}
 	}
-	for _, name := range []string{"aws-key." + p.ID, "mfa-seed." + p.ID} {
+	for _, name := range []string{"aws-key." + p.ID, "mfa-seed." + p.ID, ssoTokenPrefix + p.ID} {
 		if _, e := a.vaultCall(removed.Vault, "delete", map[string]string{"name": name}); e != nil && e.Code != "not_found" {
 			return nil, e
 		}

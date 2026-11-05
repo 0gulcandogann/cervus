@@ -15,6 +15,15 @@ type Identity struct {
 	Region    string `json:"region,omitempty"`
 	MFASerial string `json:"mfa_serial,omitempty"`
 	Vault     string `json:"vault,omitempty"` // empty: the default vault
+	SSO       *SSO   `json:"sso,omitempty"`   // set: signs in through IAM Identity Center, no access key
+}
+
+// SSO is where an identity signs in and which account and role it gets. None of it is secret.
+type SSO struct {
+	StartURL string `json:"start_url"`
+	Region   string `json:"region"`
+	Account  string `json:"account"`
+	RoleName string `json:"role_name"`
 }
 
 type Role struct {
@@ -38,6 +47,10 @@ var (
 	// The region becomes part of the STS hostname, so it must not be able to name another host.
 	regionRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 	mfaRe    = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:mfa/.+$`)
+	// The start URL is only ever sent to AWS, which opens it for the person in a browser.
+	startURLRe = regexp.MustCompile(`^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$`)
+	accountRe  = regexp.MustCompile(`^\d{12}$`)
+	roleNameRe = regexp.MustCompile(`^[\w+=,.@-]{1,64}$`)
 )
 
 func ValidName(s string) bool { return nameRe.MatchString(s) }
@@ -119,6 +132,20 @@ func (i Identity) Validate(name string) error {
 	}
 	if i.MFASerial != "" && !mfaRe.MatchString(i.MFASerial) {
 		return fmt.Errorf("mfa serial must look like arn:aws:iam::<account>:mfa/<name>")
+	}
+	if s := i.SSO; s != nil {
+		switch {
+		case i.MFASerial != "":
+			return fmt.Errorf("an SSO identity signs in through IAM Identity Center, so it has no MFA serial")
+		case !startURLRe.MatchString(s.StartURL):
+			return fmt.Errorf("the SSO start URL must look like https://my-org.awsapps.com/start")
+		case !regionRe.MatchString(s.Region):
+			return fmt.Errorf("the SSO region %q must look like us-east-1", s.Region)
+		case !accountRe.MatchString(s.Account):
+			return fmt.Errorf("the account must be 12 digits")
+		case !roleNameRe.MatchString(s.RoleName):
+			return fmt.Errorf("invalid SSO role name %q", s.RoleName)
+		}
 	}
 	return nil
 }

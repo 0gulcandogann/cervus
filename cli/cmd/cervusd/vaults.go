@@ -259,7 +259,7 @@ func (a *app) identityMove(params json.RawMessage) (any, *apiErr) {
 		}
 	}
 	var moved []string
-	for _, name := range []string{"aws-key." + p.ID, "mfa-seed." + p.ID} {
+	for _, name := range []string{"aws-key." + p.ID, "mfa-seed." + p.ID, ssoTokenPrefix + p.ID} {
 		data, e := a.vaultCall(source, "get", map[string]string{"name": name})
 		if e != nil {
 			if e.Code == "not_found" {
@@ -330,6 +330,7 @@ func (a *app) takeSessionsOffUser(id string) int {
 // forgetIdentity drops everything cached for a user. Caller holds a.mu.
 func (a *app) forgetIdentity(id string, cfg *config.Config) {
 	delete(a.identTok, id)
+	delete(a.ssoCreds, id)
 	delete(a.roleCache, userRolePrefix+id)
 	for n, r := range cfg.Roles {
 		if r.Identity == id {

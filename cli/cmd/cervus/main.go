@@ -67,6 +67,8 @@ func main() {
 		err = cmdPasswd(args)
 	case "secret":
 		err = cmdSecret(args)
+	case "sso":
+		err = cmdSSO(args)
 	case "identity":
 		err = cmdIdentity(args)
 	case "role":
@@ -499,7 +501,7 @@ func cmdSecret(args []string) error {
 
 func cmdIdentity(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus identity <add|update|move|list|remove|mfa-import|mfa-setup> ...")
+		return errors.New("usage: cervus identity <add|add-sso|update|move|list|remove|mfa-import|mfa-setup> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -655,12 +657,15 @@ func cmdIdentity(args []string) error {
 		return nil
 	case "mfa-setup":
 		return cmdMFASetup(args[1:])
+	case "add-sso":
+		return cmdIdentityAddSSO(args[1:])
 	case "list":
 		var out struct {
 			Identities []struct {
 				Name      string `json:"name"`
 				Region    string `json:"region"`
 				MFASerial string `json:"mfa_serial"`
+				SSO       bool   `json:"sso"`
 				Vault     string `json:"vault"`
 			} `json:"identities"`
 		}
@@ -669,7 +674,9 @@ func cmdIdentity(args []string) error {
 		}
 		for _, i := range out.Identities {
 			mfa := "no MFA"
-			if i.MFASerial != "" {
+			if i.SSO {
+				mfa = "sso"
+			} else if i.MFASerial != "" {
 				mfa = i.MFASerial
 			}
 			fmt.Printf("%-20s %-14s %-14s %s\n", i.Name, i.Region, i.Vault, mfa)
@@ -1073,6 +1080,9 @@ AWS:
   identity add <n> [--vault V | --own-vault] [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
   identity move <n> --vault V  Carry a user's key and MFA seed to another vault
   identity mfa-import <n>    Store the MFA seed for an identity (device-only)
+  identity add-sso <n> --start-url U --sso-region R --account A --role-name N [--region R] [--vault V]
+                             Add a user that signs in through IAM Identity Center
+  sso login <n>              Sign in through IAM Identity Center in a browser
   identity mfa-setup <n> [--device-name N] [--show-seed]
                              Create and turn on an MFA device in AWS, with the vault as authenticator
   identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify] [--allow-different-principal]

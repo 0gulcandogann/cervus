@@ -288,7 +288,7 @@ func checkParamKeys(raw json.RawMessage) *vaultproc.RemoteError {
 
 // reservedSecretPrefixes name secrets that only the daemon may touch: long-term access keys and
 // MFA seeds. Handlers reach them through vaultCall; the public secret.* API must not.
-var reservedSecretPrefixes = []string{"aws-key.", "mfa-seed."}
+var reservedSecretPrefixes = []string{"aws-key.", "mfa-seed.", ssoTokenPrefix}
 
 // guardSecretParams refuses public secret operations on reserved names. It returns the params to
 // forward, re-encoded from what it checked, so the vault cannot read a different "name" than the

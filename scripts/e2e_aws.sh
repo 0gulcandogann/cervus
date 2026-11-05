@@ -294,6 +294,36 @@ cv role add enrolled --identity enroller --arn arn:aws:iam::123456789012:role/En
 sleep 31
 check "a role can use the enrolled device" "CERVUS_SESSION=enroll cv use enrolled >/dev/null 2>&1 && CERVUS_SESSION=enroll cv whoami | grep -q enrolled"
 
+# --- signing in through IAM Identity Center (fake)
+SSO_ID="--start-url https://acme.awsapps.com/start --sso-region eu-west-1 --account 123456789012 --role-name Admin"
+check "a bad start URL is refused" "! cv identity add-sso bad --start-url http://x --sso-region eu-west-1 --account 123456789012 --role-name Admin 2>/dev/null"
+check "a bad account is refused" "! cv identity add-sso bad --start-url https://acme.awsapps.com/start --sso-region eu-west-1 --account 12 --role-name Admin 2>/dev/null"
+cv identity add-sso corp $SSO_ID >/dev/null 2>&1 && ok "identity add-sso succeeds" || bad "identity add-sso"
+check "an SSO user is listed as one" "cv identity list | grep corp | grep -q sso"
+CERVUS_SESSION=ssosess cv use user:corp > "$T/sso.txt" 2>&1
+grep -q 'cervus sso login corp' "$T/sso.txt" && ok "without a sign-in it says what to do" || bad "sso no login: $(cat "$T/sso.txt")"
+cv sso login corp > "$T/sso.txt" 2>&1 && ok "sso login finishes after the approval" || bad "sso login: $(cat "$T/sso.txt")"
+grep -q 'WXYZ-1234' "$T/sso.txt" && ok "sso login shows the code to approve" || bad "sso code"
+check "the sign-in token is stored in local/ only" "ls $T/vault/local | grep -q sso-token.corp && ! ls $T/vault/secrets | grep -q sso-token.corp"
+check "the sign-in token cannot be read directly" "cv secret get sso-token.corp 2>&1 | grep -q 'managed by Cervus'"
+check "no SSO secret in the audit log or config" "! grep -qE 'SSOTOKENVALUE|SSOCLIENTSECRET|SSOROLESECRET' $T/audit.log $T/config.json"
+check "no SSO secret in the sign-in output" "! grep -qE 'SSOTOKENVALUE|SSOCLIENTSECRET' $T/sso.txt"
+CERVUS_SESSION=ssosess cv use user:corp >/dev/null 2>&1 && ok "use user:<sso> works" || bad "use sso"
+CERVUS_SESSION=ssosess cv credential-process > "$T/ssocreds.json" 2>&1
+grep -q ASIASSOADMIN "$T/ssocreds.json" && grep -q SSOROLETOKEN "$T/ssocreds.json" && ok "credentials come from IAM Identity Center" || bad "sso creds: $(cut -c1-80 "$T/ssocreds.json")"
+grep -q '"account": "123456789012", "role": "Admin"' "$T/sts.log" && ok "it asks for the configured account and role" || bad "sso request"
+cv role add ssorole --identity corp --arn arn:aws:iam::123456789012:role/Fromsso >/dev/null 2>&1 && CERVUS_SESSION=ssorole cv use ssorole >/dev/null 2>&1 && CERVUS_SESSION=ssorole cv credential-process 2>&1 | grep -q ASIAROLEFromsso && ok "an SSO user can assume a role" || bad "sso assume role"
+check "MFA roles on an SSO user are refused" "! cv role add ssomfa --identity corp --arn arn:aws:iam::123456789012:role/X --mfa always 2>/dev/null"
+check "MFA setup on an SSO user is refused" "cv identity mfa-setup corp 2>&1 | grep -q 'signs in through SSO'"
+check "key rotation on an SSO user is refused" "printf 'A\\nB\\n' | cv identity update corp --rotate-key 2>&1 | grep -q 'signs in through SSO'"
+cv role remove ssorole >/dev/null 2>&1
+cv lock >/dev/null; printf "$PASS\n" | cv unlock >/dev/null 2>&1
+echo SSOTOKENVALUE >> "$LOG.revoked"
+CERVUS_SESSION=ssosess cv use user:corp > "$T/sso.txt" 2>&1
+grep -q 'cervus sso login corp' "$T/sso.txt" && ok "a token AWS refuses asks for a new sign-in" || bad "sso revoked: $(cat "$T/sso.txt")"
+rm -f "$LOG.revoked"
+cv identity remove corp >/dev/null 2>&1; check "removing the user removes its token" "! ls $T/vault/local | grep -q sso-token.corp"
+
 check "audit log is mode 600" "[ \"\$(mode $T/audit.log)\" = 600 ]"
 cv audit verify | grep -q intact && ok "audit chain verifies" || bad "audit verify"
 cp "$T/audit.log" "$T/audit.bak"

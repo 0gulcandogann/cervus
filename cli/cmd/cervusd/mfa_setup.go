@@ -60,6 +60,9 @@ func (a *app) identityMFASetup(params json.RawMessage) (any, *apiErr) {
 	if !ok {
 		return nil, fe("not_found", "unknown identity %q", p.ID)
 	}
+	if e := notForSSO(ident, p.ID, "MFA device of its own"); e != nil {
+		return nil, e
+	}
 	if ident.MFASerial != "" {
 		return nil, fe("mfa_exists", "identity %q already has an MFA device: %s", p.ID, ident.MFASerial)
 	}

@@ -75,6 +75,16 @@ No MFA device yet? `cervus identity mfa-setup work` creates one in AWS for an IA
 
 `--confirm` asks before switching to the role. The vault computes MFA codes itself, so this protects against mistakes, not against malware running as you.
 
+### IAM Identity Center (SSO)
+
+```sh
+cervus identity add-sso corp --start-url https://my-org.awsapps.com/start --sso-region eu-west-1 --account 123456789012 --role-name Admin
+cervus sso login corp     # approve in a browser
+cervus use user:corp      # or Alt+r
+```
+
+No access key is stored. The sign-in token stays encrypted on this device. Roles on top of it work the same way, without `--mfa`, because your organization handles MFA at sign-in. It has only been tested against a fake AWS so far.
+
 ### Several vaults
 
 Everything starts in a default vault. Give a user its own vault only when you want one:
@@ -194,7 +204,6 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 - Finish real-AWS testing
 - Encrypt role ARNs and MFA serials
 - macOS: Keychain and peer check
-- IAM Identity Center (SSO)
 - Hardening and fuzz tests
 - Independent security review
 

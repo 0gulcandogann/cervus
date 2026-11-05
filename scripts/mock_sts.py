@@ -34,8 +34,49 @@ class H(http.server.BaseHTTPRequestHandler):
     def err(self, status, code, msg):
         self.reply(status, "<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error></ErrorResponse>" % (code, msg))
 
+    def sso_reply(self, status, data):
+        b = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):  # the fake IAM Identity Center portal
+        token = self.headers.get("x-amz-sso_bearer_token")
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+        with open(LOG, "a") as f:
+            f.write(json.dumps(dict(action="GetRoleCredentials", account=q.get("account_id"), role=q.get("role_name"))) + "\n")
+        try:
+            revoked = token in open(LOG + ".revoked").read().split()
+        except FileNotFoundError:
+            revoked = False
+        if token != "SSOTOKENVALUE" or revoked:
+            return self.sso_reply(401, {"message": "Session token not found or invalid"})
+        if q.get("role_name") == "Nope":
+            return self.sso_reply(403, {"message": "No access"})
+        self.sso_reply(200, {"roleCredentials": {
+            "accessKeyId": "ASIASSO" + q["role_name"].upper(), "secretAccessKey": "SSOROLESECRET", "sessionToken": "SSOROLETOKEN",
+            "expiration": int((time.time() + 3600) * 1000)}})
+
+    def sso_post(self, body):  # the fake IAM Identity Center sign-in
+        q = json.loads(body)
+        if self.path.endswith("/client/register"):
+            return self.sso_reply(200, {"clientId": "CLIENT", "clientSecret": "SSOCLIENTSECRET"})
+        if self.path.endswith("/device_authorization"):
+            return self.sso_reply(200, {"deviceCode": "DEVICE", "userCode": "WXYZ-1234", "interval": 1, "expiresIn": 600,
+                                        "verificationUriComplete": "https://device.sso.example/?user_code=WXYZ-1234"})
+        with open(LOG, "a") as f:
+            f.write(json.dumps(dict(action="CreateToken")) + "\n")
+        polls = sum('"CreateToken"' in l for l in open(LOG))
+        if polls < 2:
+            return self.sso_reply(400, {"error": "authorization_pending"})
+        self.sso_reply(200, {"accessToken": "SSOTOKENVALUE", "expiresIn": 28800, "tokenType": "Bearer"})
+
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        if self.path != "/":
+            return self.sso_post(body)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(body).items()}
         auth = self.headers.get("Authorization", "")
         key = auth.split("Credential=")[1].split("/")[0] if "Credential=" in auth else ""
@@ -52,7 +93,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
         except FileNotFoundError:
             pass
-        if not (key in ("AKIATESTKEY", "AKIANEWKEY", "AKIAOTHERUSER", "ASIASESSION") or key.startswith("ASIAROLE")):
+        if not (key in ("AKIATESTKEY", "AKIANEWKEY", "AKIAOTHERUSER", "ASIASESSION") or key.startswith("ASIASSO") or key.startswith("ASIAROLE")):
             return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
         if q.get("Action") in ("GetSessionToken", "AssumeRole") and q.get("SerialNumber") and q.get("TokenCode") != totp(int(time.time())):
             return self.err(403, "AccessDenied", "MultiFactorAuthentication failed with invalid MFA one time pass code.")

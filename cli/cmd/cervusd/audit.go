@@ -178,6 +178,8 @@ var auditedOps = map[string][]string{
 	"identity.verify_key": {"id"},
 	"identity.mfa_import": {"id"},
 	"identity.mfa_setup":  {"id", "device_name"},
+	"identity.add_sso":    {"id", "start_url", "sso_region", "account", "role_name", "region", "vault"},
+	"identity.sso_start":  {"id"},
 	"role.add":            {"name", "identity", "arn", "mfa", "confirm"},
 	"role.edit":           {"name", "identity", "arn", "mfa", "confirm"},
 	"role.remove":         {"name"},
