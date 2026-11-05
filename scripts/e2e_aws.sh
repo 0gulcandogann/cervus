@@ -273,6 +273,27 @@ check "audit log records key rotation and role edits" "echo \"\$AUD\" | grep -q 
 check "audit log records each key replacement and whether it was verified" "echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=true' && echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=false' && echo \"\$AUD\" | grep -q 'previous_arn=.*user/tester'"
 check "audit log records an unverified update request" "echo \"\$AUD\" | grep -q 'identity.update .*verify=false'"
 check "audit log never contains secrets, TOTP codes or the passphrase" "! grep -qE 'SUPERSECRETKEYVALUE|NEWSECRETVALUE|OTHERSECRETVALUE|AKIANEWKEY|correct horse|$SEED|SECRET-ASIA' $T/audit.log"
+# --- enrolling MFA from the CLI (fake IAM)
+printf 'AKIAOTHERUSER\nOTHERSECRETVALUE\n' | cv identity add enroller >/dev/null 2>&1
+ENROLL_SEED=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+cv identity mfa-setup enroller --device-name Denied > "$T/mfa.txt" 2>&1; R=$?
+[ $R -ne 0 ] && grep -q "iam:CreateVirtualMFADevice" "$T/mfa.txt" && ok "mfa-setup explains missing permissions" || bad "mfa-setup denied: $(cat "$T/mfa.txt")"
+cv identity mfa-setup enroller --device-name FailEnable > "$T/mfa.txt" 2>&1; R=$?
+[ $R -ne 0 ] && ok "a device AWS refuses fails mfa-setup" || bad "mfa-setup fail enable: $(cat "$T/mfa.txt")"
+grep -q '"action": "DeleteVirtualMFADevice"' "$T/sts.log" && ok "a failed mfa-setup removes the device" || bad "mfa-setup device left"
+cv secret list | grep -q mfa-seed.enroller && bad "a failed mfa-setup left the seed" || ok "a failed mfa-setup removes the seed"
+cv identity mfa-setup enroller > "$T/mfa.txt" 2>&1 && ok "mfa-setup succeeds" || bad "mfa-setup: $(cat "$T/mfa.txt")"
+grep -q "$ENROLL_SEED" "$T/mfa.txt" && bad "mfa-setup printed the seed" || ok "mfa-setup does not print the seed"
+grep -q "cannot restore" "$T/mfa.txt" && ok "mfa-setup warns the seed is device-only" || bad "mfa-setup warning: $(cat "$T/mfa.txt")"
+check "the seed is stored in local/ only" "ls $T/vault/local | grep -q mfa-seed.enroller && ! ls $T/vault/secrets | grep -q mfa-seed.enroller"
+check "the identity has the new serial" "cv identity list | grep -q mfa/cervus-enroller"
+check "the seed is not in the audit log or config" "! grep -q $ENROLL_SEED $T/audit.log $T/config.json"
+check "the serial survives a second attempt" "! cv identity mfa-setup enroller >/dev/null 2>&1 && cv identity list | grep -q mfa/cervus-enroller"
+check "the audit log records mfa-setup" "grep -q identity.mfa_setup $T/audit.log"
+cv role add enrolled --identity enroller --arn arn:aws:iam::123456789012:role/Enrolled --mfa always >/dev/null
+sleep 31
+check "a role can use the enrolled device" "CERVUS_SESSION=enroll cv use enrolled >/dev/null 2>&1 && CERVUS_SESSION=enroll cv whoami | grep -q enrolled"
+
 check "audit log is mode 600" "[ \"\$(mode $T/audit.log)\" = 600 ]"
 cv audit verify | grep -q intact && ok "audit chain verifies" || bad "audit verify"
 cp "$T/audit.log" "$T/audit.bak"

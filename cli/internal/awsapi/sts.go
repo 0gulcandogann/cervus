@@ -50,17 +50,22 @@ func (s *STS) client() *http.Client {
 }
 
 func (s *STS) call(c Credentials, params url.Values) ([]byte, error) {
+	return postSigned(s.client(), s.endpoint(), s.Region, "sts", "AWS STS", c, params, s.now())
+}
+
+// postSigned sends one signed form request and returns the body of a successful reply.
+func postSigned(client *http.Client, endpoint, region, service, label string, c Credentials, params url.Values, now time.Time) ([]byte, error) {
 	body := []byte(params.Encode())
-	req, err := http.NewRequest(http.MethodPost, s.endpoint(), bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	Sign(req, body, c, s.Region, "sts", s.now())
+	Sign(req, body, c, region, service, now)
 
-	resp, err := s.client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach AWS STS: %w", err)
+		return nil, fmt.Errorf("cannot reach %s: %w", label, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

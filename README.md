@@ -71,6 +71,8 @@ cervus role add prod --identity work --arn arn:aws:iam::123456789012:role/Prod -
 | `once` | One MFA-backed session token, reused for this user's roles |
 | `always` | A fresh code each time credentials are issued |
 
+No MFA device yet? `cervus identity mfa-setup work` creates one in AWS for an IAM user and turns it on, with the vault as the authenticator. The seed stays on this device and a recovery key cannot restore it, so keep a second MFA device, or add `--show-seed` once to copy it to another authenticator. It has only been tested against a fake AWS so far.
+
 `--confirm` asks before switching to the role. The vault computes MFA codes itself, so this protects against mistakes, not against malware running as you.
 
 ### Several vaults
@@ -191,7 +193,6 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 
 - Finish real-AWS testing
 - Encrypt role ARNs and MFA serials
-- MFA enrollment from the CLI
 - macOS: Keychain and peer check
 - IAM Identity Center (SSO)
 - Hardening and fuzz tests

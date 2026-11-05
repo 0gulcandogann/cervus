@@ -85,6 +85,7 @@ var apiHandlers = map[string]handler{
 	"vault.list":          (*app).vaultList,
 	"identity.verify_key": (*app).identityVerifyKey,
 	"identity.mfa_import": (*app).identityMFAImport,
+	"identity.mfa_setup":  (*app).identityMFASetup,
 	"role.add":            (*app).roleAdd,
 	"role.list":           (*app).roleList,
 	"role.edit":           (*app).roleEdit,

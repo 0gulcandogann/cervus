@@ -177,6 +177,7 @@ var auditedOps = map[string][]string{
 	"identity.remove":     {"id"},
 	"identity.verify_key": {"id"},
 	"identity.mfa_import": {"id"},
+	"identity.mfa_setup":  {"id", "device_name"},
 	"role.add":            {"name", "identity", "arn", "mfa", "confirm"},
 	"role.edit":           {"name", "identity", "arn", "mfa", "confirm"},
 	"role.remove":         {"name"},

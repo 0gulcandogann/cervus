@@ -54,7 +54,7 @@ class H(http.server.BaseHTTPRequestHandler):
             pass
         if not (key in ("AKIATESTKEY", "AKIANEWKEY", "AKIAOTHERUSER", "ASIASESSION") or key.startswith("ASIAROLE")):
             return self.err(403, "InvalidClientTokenId", "The security token included in the request is invalid.")
-        if q.get("SerialNumber") and q.get("TokenCode") != totp(int(time.time())):
+        if q.get("Action") in ("GetSessionToken", "AssumeRole") and q.get("SerialNumber") and q.get("TokenCode") != totp(int(time.time())):
             return self.err(403, "AccessDenied", "MultiFactorAuthentication failed with invalid MFA one time pass code.")
 
         action = q.get("Action")
@@ -72,6 +72,24 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.err(403, "AccessDenied", "User is not authorized to perform: sts:AssumeRole")
             secs = 120 if name == "Short" else int(q.get("DurationSeconds", "3600"))
             return self.reply(200, creds_xml("AssumeRole", "ASIAROLE" + name, "TOK-" + name, secs))
+        if action == "CreateVirtualMFADevice":
+            name = q["VirtualMFADeviceName"]
+            if name == "Denied":
+                return self.err(403, "AccessDenied", "User is not authorized to perform: iam:CreateVirtualMFADevice")
+            return self.reply(200, "<CreateVirtualMFADeviceResponse><CreateVirtualMFADeviceResult><VirtualMFADevice>"
+                                   "<SerialNumber>arn:aws:iam::123456789012:mfa/%s</SerialNumber>"
+                                   "<Base32StringSeed>%s</Base32StringSeed></VirtualMFADevice>"
+                                   "</CreateVirtualMFADeviceResult></CreateVirtualMFADeviceResponse>"
+                                   % (name, base64.b64encode(base64.b32encode(SEED)).decode()))
+        if action == "EnableMFADevice":
+            now = int(time.time())
+            pair = (q.get("AuthenticationCode1"), q.get("AuthenticationCode2"))
+            good = {(totp(now - 30 + d), totp(now + d)) for d in (-30, 0)}
+            if q["SerialNumber"].endswith("/FailEnable") or pair not in good:
+                return self.err(403, "InvalidAuthenticationCode", "Authentication code for device is not valid.")
+            return self.reply(200, "<EnableMFADeviceResponse/>")
+        if action == "DeleteVirtualMFADevice":
+            return self.reply(200, "<DeleteVirtualMFADeviceResponse/>")
         self.err(400, "InvalidAction", "unknown action")
 
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)

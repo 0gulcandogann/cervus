@@ -499,7 +499,7 @@ func cmdSecret(args []string) error {
 
 func cmdIdentity(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cervus identity <add|update|move|list|remove|mfa-import> ...")
+		return errors.New("usage: cervus identity <add|update|move|list|remove|mfa-import|mfa-setup> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -653,6 +653,8 @@ func cmdIdentity(args []string) error {
 			fmt.Println("Note: this identity has no MFA serial yet, so roles cannot use MFA.")
 		}
 		return nil
+	case "mfa-setup":
+		return cmdMFASetup(args[1:])
 	case "list":
 		var out struct {
 			Identities []struct {
@@ -1071,6 +1073,8 @@ AWS:
   identity add <n> [--vault V | --own-vault] [--region R] [--mfa-serial ARN]   Store an IAM access key (verified with AWS)
   identity move <n> --vault V  Carry a user's key and MFA seed to another vault
   identity mfa-import <n>    Store the MFA seed for an identity (device-only)
+  identity mfa-setup <n> [--device-name N] [--show-seed]
+                             Create and turn on an MFA device in AWS, with the vault as authenticator
   identity update <n> [--rotate-key] [--region R] [--mfa-serial ARN] [--no-verify] [--allow-different-principal]
                              Rotate the key or change settings; roles and MFA seed stay
   identity list | remove <n>
