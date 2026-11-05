@@ -106,6 +106,7 @@ func cmdSetup(args []string) error {
 	if err != nil {
 		return err
 	}
+	printBanner(os.Stdout)
 	confirm := func(question string) (bool, error) {
 		if *yes {
 			return true, nil

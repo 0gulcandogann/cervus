@@ -139,6 +139,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   printf 'setup test passphrase\nsetup test passphrase\n' | cv setup --yes > "$T/setup.txt" 2>&1 && ok "setup succeeds" || bad "setup: $(tail -3 "$T/setup.txt")"
   grep -q 'restart cervusd.service' "$T/systemctl.log" && ok "setup starts the service" || bad "setup service"
   cv status | grep -q unlocked && ok "setup creates the vault" || bad "setup vault"
+  grep -q "█" "$T/setup.txt" && bad "banner printed into a pipe" || ok "no banner when the output is not a terminal"
   grep -q "RECOVERY KEY" "$T/setup.txt" && ok "setup shows the recovery key" || bad "setup recovery key"
   grep -q '^\[profile cervus\]' "$AWS_CONFIG_FILE" && ok "setup adds the AWS profile" || bad "setup profile"
   grep -q '# cervus' "$HOME/.zshrc" && grep -q -- '--prompt' "$HOME/.zshrc" && ok "setup adds the shell integration" || bad "setup shell"
@@ -186,6 +187,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   grep -q "any program running as you" "$T/first.txt" && ok "it offers the keychain and states the trade-off" || bad "first run keychain offer"
   [ ! -e "$FAKE_KEYRING" ] && [ ! -e "$T/svc-vault/keychain-enabled" ] && ok "declining the keychain stores nothing" || bad "first run keychain declined"
   grep -q "After a restart" "$T/first.txt" && grep -q "asks for its passphrase" "$T/first.txt" && ok "it says what happens after a restart" || bad "first run restart note"
+  grep -q "█" "$T/first.txt" && ok "a first run on a terminal shows the banner" || bad "first run banner"
   grep -q "AGE-SECRET-KEY" "$T/first.txt" && bad "recovery key in test output" || ok "the test output holds no recovery key"
   cv lock >/dev/null; cv unlock </dev/null >/dev/null 2>&1 && bad "unlocked with nothing stored" || ok "without the keychain a restart needs the passphrase"
   fresh

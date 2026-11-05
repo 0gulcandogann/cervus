@@ -47,6 +47,8 @@ func main() {
 		fmt.Println("cervus", version)
 	case "setup":
 		err = cmdSetup(args)
+	case "banner":
+		printBanner(os.Stdout)
 	case "keybinding":
 		err = cmdKeybinding(args)
 	case "help", "-h", "--help":

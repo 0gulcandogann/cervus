@@ -25,6 +25,8 @@ cervus identity add work     # asks for an access key and checks it with AWS
 cervus role add dev --identity work --arn arn:aws:iam::123456789012:role/Dev
 ```
 
+`cervus` and `cervus setup` open with a banner that fits your terminal's width: run `cervus banner` to see it. In a pipe it prints nothing, and with `NO_COLOR` or without 24-bit color it is plain text. Everyday commands never show it.
+
 Press `Alt+r`, pick a role, and use AWS as usual:
 
 ```sh
