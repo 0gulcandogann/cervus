@@ -73,10 +73,9 @@ jobs:
           go test -run='^$' -fuzz='^FuzzSTSResponses$' -fuzztime=20s ./internal/awsapi
         working-directory: cli
 
-  # The full suites on a real Mac. While this finds out what fails there, it does not block.
+  # The full suites on a Mac, and the real macOS Keychain in a throwaway keychain.
   macos-e2e:
     runs-on: macos-15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

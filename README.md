@@ -8,7 +8,7 @@
 
 <sub>Recorded from the real CLI and AWS CLI against a fake STS and a made-up account, with the vault already unlocked.</sub>
 
-> **Pre-release.** Cervus has not had an independent security review, and only part of it has been tried on real AWS. Do not use it with production credentials yet.
+> **Beta.** Cervus is ready to try with real accounts, but it has not had an independent security review yet, so start with a non-production account. Tested: Linux and macOS on CI machines, including the real macOS Keychain, against a fake AWS; the core role flows once against real AWS. Not yet tested: `mfa-setup` and SSO against real AWS, and macOS on a person's own Mac.
 
 ## Why
 
@@ -138,7 +138,7 @@ Run `cervus help` for every command. After upgrading, restart `cervusd`: an olde
 Release archives are available for `linux-amd64`, `linux-arm64`, `darwin-arm64` and `darwin-amd64`. Keep the three programs in one folder:
 
 ```sh
-V=0.0.11 P=linux-amd64
+V=0.1.0-beta.1 P=linux-amd64
 curl -LO "https://github.com/0gulcandogann/cervus/releases/download/v$V/cervus-$V-$P.tar.gz"
 gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # optional: proves GitHub Actions built it from this repo
 tar -xzf "cervus-$V-$P.tar.gz"
