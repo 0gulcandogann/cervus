@@ -31,6 +31,8 @@ Press `Alt+r`, pick a role, and use AWS as usual:
 aws sts get-caller-identity
 ```
 
+It keeps working after a restart: the daemon starts at login and new terminals have `Alt+r`. The vault stays locked until the picker first needs it, then asks for its passphrase once. To skip that, see [fewer passphrase prompts](#optional-fewer-passphrase-prompts).
+
 Already have keys in `~/.aws/credentials`? `cervus migrate` moves them into the vault. It checks each key before removing the plaintext.
 
 ## Everyday use
@@ -118,7 +120,7 @@ Run `cervus help` for every command. After upgrading, restart `cervusd`: an olde
 Release archives are available for `linux-amd64`, `linux-arm64`, `darwin-arm64` and `darwin-amd64`. Keep the three programs in one folder:
 
 ```sh
-V=0.0.7 P=linux-amd64
+V=0.0.8 P=linux-amd64
 curl -LO "https://github.com/0gulcandogann/cervus/releases/download/v$V/cervus-$V-$P.tar.gz"
 gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # optional: proves GitHub Actions built it from this repo
 tar -xzf "cervus-$V-$P.tar.gz"

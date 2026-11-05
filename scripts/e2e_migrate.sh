@@ -172,6 +172,31 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   SHELL=/usr/bin/fish cv setup --yes </dev/null > "$T/s.txt" 2>&1
   grep -q "not supported" "$T/s.txt" && ! grep -q "to switch" "$T/s.txt" && ok "an unsupported shell gets no key promise" || bad "setup fish"
   cv uninstall-service >/dev/null 2>&1
+
+  # A first run on a terminal, then a stand-in for a reboot. Fake keyring only.
+  mkdir -p "$T/fakekc"; cp "$HERE/fake_secret_tool.sh" "$T/fakekc/secret-tool"; chmod +x "$T/fakekc/secret-tool"
+  export PATH="$T/fakekc:$PATH" FAKE_KEYRING="$T/fake-keyring"
+  [ "$(command -v secret-tool)" = "$T/fakekc/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
+  unset CERVUS_NO_KEYCHAIN
+  FIRST() { python3 -I "$HERE/setup_first_run_test.py" "$B/cervus" "first run passphrase" "$1"; }
+  fresh() { [ -e "$T/svc.pid" ] && kill "$(cat "$T/svc.pid")" 2>/dev/null; sleep 0.3; rm -rf "$T/svc-vault" "$T/svc.pid" "$T/svc.json" "$HOME/.zshrc" "$AWS_CONFIG_FILE" "$FAKE_KEYRING" "$HOME/.config/systemd" ; }
+  fresh
+  FIRST n > "$T/first.txt" 2>&1 && ok "a first run on a terminal finishes" || bad "first run: $(tail -3 "$T/first.txt")"
+  ! grep -q UNANSWERED "$T/first.txt" && ok "a first run asks every question" || bad "first run questions: $(grep UNANSWERED "$T/first.txt")"
+  grep -q "any program running as you" "$T/first.txt" && ok "it offers the keychain and states the trade-off" || bad "first run keychain offer"
+  [ ! -e "$FAKE_KEYRING" ] && [ ! -e "$T/svc-vault/keychain-enabled" ] && ok "declining the keychain stores nothing" || bad "first run keychain declined"
+  grep -q "After a restart" "$T/first.txt" && grep -q "asks for its passphrase" "$T/first.txt" && ok "it says what happens after a restart" || bad "first run restart note"
+  grep -q "AGE-SECRET-KEY" "$T/first.txt" && bad "recovery key in test output" || ok "the test output holds no recovery key"
+  cv lock >/dev/null; cv unlock </dev/null >/dev/null 2>&1 && bad "unlocked with nothing stored" || ok "without the keychain a restart needs the passphrase"
+  fresh
+  FIRST y > "$T/first.txt" 2>&1 && ok "a first run with the keychain finishes" || bad "first run keychain: $(tail -3 "$T/first.txt")"
+  [ "$(cat "$FAKE_KEYRING")" = "first run passphrase" ] && [ -e "$T/svc-vault/keychain-enabled" ] && ok "accepting stores the passphrase" || bad "first run keychain store"
+  grep -q "opens by itself" "$T/first.txt" && ok "it says the vault opens by itself" || bad "first run keychain note"
+  PATH="$T/fakebin:$PATH" systemctl --user restart cervusd.service; kill "$(cat "$T/svc.pid")" 2>/dev/null; rm -f "$T/svc.pid"; sleep 0.5
+  PATH="$T/fakebin:$PATH" systemctl --user restart cervusd.service; sleep 1
+  cv status | grep -q locked && ok "after a restart the vault starts locked" || bad "restart locked"
+  cv unlock </dev/null 2>&1 | grep -q "from the keychain" && ok "after a restart the keychain opens it without asking" || bad "restart keychain"
+  cv uninstall-service >/dev/null 2>&1
   exit $((FAILS > 0))
 )
 [ $? = 0 ] || FAILS=$((FAILS+1))

@@ -217,6 +217,50 @@ def test_shell(name, argv, setup=()):
 
     return t, sid
 
+def test_after_restart(name, argv, setup):
+    # After a reboot: the daemon is back, every vault is locked, and Alt+r is all it should take.
+    passphrase = os.environ["CERVUS_TEST_PASS"]
+    old = Term(argv)
+    for cmd in setup: old.run(cmd)
+    old.run("eval \"$('%s' init-shell %s --prompt)\"" % (CERVUS, name))
+    seg = old.run("echo SID=$CERVUS_SESSION", "R0") or ""
+    m = re.search(r"SID=(s-[0-9a-f]{8})", seg)
+    sid = m.group(1) if m else ""
+    old.run("'%s' use alpha >/dev/null" % CERVUS, "R1")
+    subprocess.run(["bash", os.environ["CERVUS_TEST_RESTART"]], check=True)
+
+    new = Term(argv)
+    for cmd in setup: new.run(cmd)
+    new.run("eval \"$('%s' init-shell %s --prompt)\"" % (CERVUS, name))
+    mark = len(new.raw)
+    new.send("\x1br")
+    seg = new.expect("Switch role")
+    ok("%s: after a restart Alt+r works in a new terminal" % name) if seg else bad("%s: Alt+r after restart" % name, new.tail())
+    new.send("1")
+    seg = new.expect("Passphrase:")
+    if seg is None: bad("%s: after a restart the picker asks to open the vault" % name, new.tail())
+    else:
+        ok("%s: after a restart the picker asks to open the vault" % name)
+        new.send(passphrase + "\r")
+        seg = new.expect('Now using role "alpha"')
+        ok("%s: after a restart a role is one key and a passphrase away" % name) if seg else bad("%s: switch after restart" % name, new.tail())
+    ok("%s: the passphrase stays hidden" % name) if passphrase not in new.raw[mark:] else bad("%s: passphrase echoed after restart" % name)
+    seg = new.run("'%s' credential-process | cut -c1-40" % CERVUS, "R2") or ""
+    ok("%s: the AWS tools work right after that" % name) if "ASIAROLEalpha" in seg else bad("%s: credentials after restart" % name, seg)
+
+    # A terminal left open across the restart recovers too.
+    seg = old.run("'%s' whoami" % CERVUS, "R3") or ""
+    ok("%s: an old terminal has no role after a restart" % name) if "no role selected" in seg else bad("%s: old terminal role" % name, seg)
+    old.send("\x1br"); old.expect("Switch role")
+    old.send("2")
+    seg = old.expect('Now using role "beta"')
+    ok("%s: Alt+r works in a terminal left open across the restart" % name) if seg else bad("%s: old terminal Alt+r" % name, old.tail())
+    old.close()
+    time.sleep(3.5)
+    after = cervus("whoami", session=sid)
+    ok("%s: that terminal's session is cleaned up when it closes" % name) if "no role selected" in after else bad("%s: old session cleanup" % name, after)
+    new.close()
+
 def main():
     shells = [("bash", ["bash", "--noprofile", "--norc", "-i"], ())]
     zsh = os.environ.get("ZSH")
@@ -257,6 +301,8 @@ def main():
         after = cervus("whoami", session=sid)
         if "role " in before and "no role selected" in after: ok("%s: closing the shell drops its session" % name)
         else: bad("%s: session cleanup" % name, "before=%r after=%r" % (before, after))
+    for name, argv, setup in shells:
+        test_after_restart(name, argv, setup)
     print()
     print("all shell checks passed" if fails == 0 else "%d shell check(s) failed" % fails)
     sys.exit(1 if fails else 0)

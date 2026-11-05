@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -154,6 +155,9 @@ func cmdSetup(args []string) error {
 				return err
 			}
 			changed = true
+			if isTTY(os.Stdin) {
+				offerKeychain()
+			}
 		} else {
 			declined = true
 		}
@@ -217,9 +221,7 @@ func cmdSetup(args []string) error {
 	}
 	_ = client.Call("identity.list", nil, &users)
 	fmt.Println()
-	if st.Initialized && st.Locked {
-		fmt.Println("Your vault is locked; the picker asks for the passphrase when it needs it.")
-	}
+	restartNote()
 	if strings.Contains(string(credsData), "aws_secret_access_key") {
 		fmt.Println("Plaintext AWS keys found in " + credsPath + ". Move them into the vault: cervus migrate")
 	}
@@ -235,6 +237,40 @@ func cmdSetup(args []string) error {
 	}
 	fmt.Printf("Then press %s to switch between your roles, users and vaults.\n", currentShellKey().label())
 	return nil
+}
+
+// offerKeychain asks once, right after the vault is made, whether a restart should need the passphrase.
+// The safe answer is the default, and --yes never takes this step: it is a trade-off, not a chore.
+func offerKeychain() {
+	if runtime.GOOS != "linux" || keychainTurnedOff() {
+		return
+	}
+	if _, err := exec.LookPath("secret-tool"); err != nil {
+		return
+	}
+	dir, err := currentVaultDir("")
+	if err != nil {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Optional: open the vault by itself after a restart, so Alt+r needs no passphrase.")
+	if err := keychainEnable(dir, "", false); err != nil && err.Error() != "cancelled" {
+		fmt.Printf("Warning: the keychain was not set up: %v\n", err)
+	}
+}
+
+// restartNote says what a reboot leaves behind, because that is what people expect to just work.
+func restartNote() {
+	dir, err := currentVaultDir("")
+	if err != nil {
+		return
+	}
+	if !keychainTurnedOff() && hasKeychainMarker(dir, keychainEnabledFile) {
+		fmt.Println("After a restart the daemon starts at login, and the vault opens by itself when it is first needed.")
+		return
+	}
+	fmt.Println("After a restart the daemon starts at login, and the vault stays locked: the picker asks for its passphrase once.")
+	fmt.Println("To skip that, at a security cost: cervus keychain enable")
 }
 
 // shellRC is the file a shell reads at startup; zsh looks in $ZDOTDIR when it is set.

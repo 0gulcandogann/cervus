@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "cervus-vault"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "age",
  "base64 0.22.1",
