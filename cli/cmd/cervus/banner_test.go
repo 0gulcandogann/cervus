@@ -13,14 +13,16 @@ func visibleWidth(line string) int { return utf8.RuneCountInString(ansiRe.Replac
 
 func TestBannerFillsTheWidthAndStaysABand(t *testing.T) {
 	cases := []struct{ cols, lines, wantWidth, maxRows int }{
-		{200, 50, 199, 20},
-		{146, 40, 145, 20},
-		{300, 60, 220, 20},
-		{120, 30, 119, 19},
-		{100, 30, 99, 16},
-		{90, 24, 89, 14},
-		{80, 24, 79, 12},
-		{80, 12, 79, 8},
+		{500, 80, 500, 20},
+		{300, 60, 300, 20},
+		{221, 50, 221, 20},
+		{200, 50, 200, 20},
+		{146, 40, 146, 20},
+		{120, 30, 120, 19},
+		{100, 30, 100, 16},
+		{90, 24, 90, 14},
+		{80, 24, 80, 12},
+		{80, 12, 80, 8},
 	}
 	for _, c := range cases {
 		out := renderBanner(c.cols, c.lines, true)

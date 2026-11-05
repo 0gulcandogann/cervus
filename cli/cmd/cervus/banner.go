@@ -27,8 +27,7 @@ var (
 )
 
 const (
-	bannerMaxWidth  = 220
-	bannerMinWidth  = 76
+	bannerMinWidth  = 77
 	bannerMaxRows   = 20
 	bannerCloudTop  = 30 // the part of the cloud picture the band shows
 	bannerCloudEnd  = 540
@@ -173,7 +172,7 @@ func renderBanner(cols, lines int, color bool) []string {
 		}
 		return []string{"cervus"}
 	}
-	width := min(cols-1, bannerMaxWidth)
+	width := cols
 	rows := min(lines-4, max(10, min(bannerMaxRows, width*16/100)))
 	if width < bannerMinWidth || rows < 8 {
 		return nil
