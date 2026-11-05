@@ -5,6 +5,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="${BIN:-$HERE/../bin}"
 export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring, except the fake one below
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; } # GNU, then BSD
 T="$(mktemp -d)"; mkdir -p "$T/run"
 export CERVUS_SOCKET="$T/run/cervus.sock"
 PASS="correct horse battery"
@@ -37,7 +38,7 @@ printf 'AKIATESTKEY\nSUPERSECRETKEYVALUE\n' | cv identity add work --region eu-w
 cv identity list | grep -q "work" && ok "identity listed" || bad "identity list"
 check "request was SigV4-signed" "grep -q '\"signed\": true' $LOG && ! grep -q '\"signed\": false' $LOG"
 check "access key not in plaintext on disk" "! grep -rq SUPERSECRETKEYVALUE $T/vault $T/config.json"
-check "config.json is mode 600" "[ \"\$(stat -c %a $T/config.json)\" = 600 ]"
+check "config.json is mode 600" "[ \"\$(mode $T/config.json)\" = 600 ]"
 printf "$SEED\n" | cv identity mfa-import work 2>&1 | grep -q "device only" && ok "mfa seed imported (device-only)" || bad "mfa import"
 check "mfa seed stored in local/ only" "ls $T/vault/local | grep -q mfa-seed.work && ! ls $T/vault/secrets | grep -q mfa-seed"
 
@@ -272,10 +273,10 @@ check "audit log records key rotation and role edits" "echo \"\$AUD\" | grep -q 
 check "audit log records each key replacement and whether it was verified" "echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=true' && echo \"\$AUD\" | grep -q 'identity.key_replaced .*id=work.*verified=false' && echo \"\$AUD\" | grep -q 'previous_arn=.*user/tester'"
 check "audit log records an unverified update request" "echo \"\$AUD\" | grep -q 'identity.update .*verify=false'"
 check "audit log never contains secrets, TOTP codes or the passphrase" "! grep -qE 'SUPERSECRETKEYVALUE|NEWSECRETVALUE|OTHERSECRETVALUE|AKIANEWKEY|correct horse|$SEED|SECRET-ASIA' $T/audit.log"
-check "audit log is mode 600" "[ \"\$(stat -c %a $T/audit.log)\" = 600 ]"
+check "audit log is mode 600" "[ \"\$(mode $T/audit.log)\" = 600 ]"
 cv audit verify | grep -q intact && ok "audit chain verifies" || bad "audit verify"
 cp "$T/audit.log" "$T/audit.bak"
-sed -i '0,/"role":"dev"/s//"role":"evil"/' "$T/audit.log"
+perl -i -pe 's/"role":"dev"/"role":"evil"/ && $done++ if !$done' "$T/audit.log"
 cv audit verify 2>&1 | grep -q "chain breaks at line" && ok "tampering with an entry is detected" || bad "tamper detection"
 cp "$T/audit.bak" "$T/audit.log"
 

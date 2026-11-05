@@ -51,3 +51,27 @@ jobs:
         working-directory: cli
       - run: cargo test --locked
         working-directory: vault
+
+  # The full suites on a real Mac. While this finds out what fails there, it does not block.
+  macos-e2e:
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - run: make build
+      - run: BIN=$PWD/bin bash scripts/e2e.sh
+        if: always()
+      - run: BIN=$PWD/bin bash scripts/e2e_aws.sh
+        if: always()
+      - run: BIN=$PWD/bin bash scripts/e2e_migrate.sh
+        if: always()
+      - run: BIN=$PWD/bin bash scripts/e2e_vaults.sh
+        if: always()
+      - run: BIN=$PWD/bin ZSH=$(command -v zsh) bash scripts/e2e_shell.sh
+        if: always()

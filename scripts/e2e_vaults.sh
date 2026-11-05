@@ -5,6 +5,7 @@ set -u
 export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="$(cd "${BIN:-$HERE/../bin}" && pwd)"
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; } # GNU, then BSD
 T="$(mktemp -d)"; mkdir -p "$T/run"
 export CERVUS_SOCKET="$T/run/c.sock"
 unset CERVUS_SESSION CERVUS_SESSION_OWNER CERVUS_VAULT
@@ -31,7 +32,7 @@ printf "$PA\n$PA\n" | cv vault create kisisel >"$T/create.txt" 2>&1 && ok "vault
 grep -q "RECOVERY KEY" "$T/create.txt" && ok "a new vault gets its own recovery key" || bad "vault recovery key"
 RK=$(grep -o 'AGE-SECRET-KEY-[A-Z0-9]*' "$T/create.txt")
 cv vault list | grep '^kisisel ' | grep -q unlocked && ok "a new vault is listed, unlocked" || bad "vault list new"
-[ "$(stat -c %a "$T/vaults")" = 700 ] && ok "the vaults folder is private" || bad "vaults folder mode"
+[ "$(mode "$T/vaults")" = 700 ] && ok "the vaults folder is private" || bad "vaults folder mode"
 printf "$PA\n$PA\n" | cv vault create kisisel 2>&1 | grep -qi "already" && ok "an existing vault is not overwritten" || bad "vault create twice"
 for name in ../evil 'a/b' .hidden UPPER; do
   printf "$PA\n$PA\n" | cv vault create "$name" 2>&1 | grep -qi "vault name" && ok "vault name '$name' is refused" || bad "vault name '$name'"

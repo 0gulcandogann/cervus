@@ -5,6 +5,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 B="${BIN:-$HERE/../bin}"
 export CERVUS_NO_KEYCHAIN=1 # tests never touch a real keyring
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; } # GNU, then BSD
 T="$(mktemp -d)"; mkdir -p "$T/run" "$T/aws"
 export CERVUS_SOCKET="$T/run/cervus.sock" HOME="$T/home"; mkdir -p "$HOME"
 export AWS_SHARED_CREDENTIALS_FILE="$T/aws/credentials" AWS_CONFIG_FILE="$T/aws/config"
@@ -65,10 +66,11 @@ check "doctor suggests the aws profile and shell setup" "grep -q 'aws-profile --
 check "doctor exits non-zero when something is wrong" "[ $RC -ne 0 ]"
 
 # --- migrate
-HASH=$(sha256sum "$AWS_SHARED_CREDENTIALS_FILE" | cut -d' ' -f1)
+hash_of() { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; }
+HASH=$(hash_of "$AWS_SHARED_CREDENTIALS_FILE" | cut -d' ' -f1)
 cv migrate --dry-run > "$T/dry.txt" 2>&1
 check "dry-run shows the plan" "grep -q 'identity default' $T/dry.txt && grep -q 'role     prod' $T/dry.txt && grep -q 'skipped profile \"temp\"' $T/dry.txt"
-check "dry-run changes nothing" "[ \"\$(sha256sum $AWS_SHARED_CREDENTIALS_FILE | cut -d' ' -f1)\" = $HASH ]"
+check "dry-run changes nothing" "[ \"\$(hash_of $AWS_SHARED_CREDENTIALS_FILE | cut -d' ' -f1)\" = $HASH ]"
 
 cv migrate --yes > "$T/mig.txt" 2>&1
 check "good key migrated" "grep -q 'ok identity default' $T/mig.txt"
@@ -76,7 +78,7 @@ check "bad key rejected by AWS and left alone" "grep -q 'FAILED identity broken'
 check "roles imported" "grep -q 'ok role dev' $T/mig.txt && grep -q 'ok role prod' $T/mig.txt"
 check "plaintext secret removed from the credentials file" "! grep -q PLAINTEXTSECRETVALUE $AWS_SHARED_CREDENTIALS_FILE && ! grep -q AKIATESTKEY $AWS_SHARED_CREDENTIALS_FILE"
 check "unrelated content kept (comment, temp creds, bad key)" "grep -q '# keys of mine' $AWS_SHARED_CREDENTIALS_FILE && grep -q ASIATEMP $AWS_SHARED_CREDENTIALS_FILE && grep -q '\\[broken\\]' $AWS_SHARED_CREDENTIALS_FILE"
-check "credentials file is mode 600 afterwards" "[ \"\$(stat -c %a $AWS_SHARED_CREDENTIALS_FILE)\" = 600 ]"
+check "credentials file is mode 600 afterwards" "[ \"\$(mode $AWS_SHARED_CREDENTIALS_FILE)\" = 600 ]"
 check "secret is not in plaintext in the vault dir" "! grep -rq PLAINTEXTSECRETVALUE $T/vault"
 check "identity carries the region and MFA serial" "cv identity list | grep -q 'default.*eu-west-1.*mfa/me'"
 check "prod role is mfa=always, dev is mfa=none" "cv role list | grep -E '^prod ' | grep -q 'mfa=always' && cv role list | grep -E '^dev ' | grep -q 'mfa=none'"
