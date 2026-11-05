@@ -245,6 +245,7 @@ unset AWS_CONFIG_FILE CERVUS_SESSION_OWNER
 
   # A stored passphrase reopens the vault after an idle lock, but not after an explicit one.
   mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
+  cp "$HERE/fake_security.sh" "$T/fakebin/security"; chmod +x "$T/fakebin/security"
   export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring"
   [ "$(command -v secret-tool)" = "$T/fakebin/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
   unset CERVUS_NO_KEYCHAIN
