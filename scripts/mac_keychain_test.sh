@@ -19,6 +19,15 @@ security list-keychains -d user -s "$KC"
 security default-keychain -d user -s "$KC"
 cleanup() { [ -n "${D:-}" ] && kill "$D" 2>/dev/null; security delete-keychain "$KC" 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
+# How security behaves here, printed for whoever reads the CI log. Dummy values only.
+lim() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+probe() { local start=$SECONDS; "$@" >/dev/null 2>&1; echo "probe rc=$? $((SECONDS-start))s: ${*: -1}"; }
+probe lim 15 bash -c "printf 'add-generic-password -U -a p1 -s cervus-probe -w 6869\\n' | security -i"
+probe lim 15 bash -c "printf 'add-generic-password -U -a p2 -s cervus-probe -w 6869\\nexit\\n' | security -i"
+probe lim 15 bash -c "printf 'add-generic-password -U -a p3 -s cervus-probe -w 6869\\nquit\\n' | security -i"
+probe lim 15 bash -c "printf 'add-generic-password -U -a p4 -s cervus-probe -w 6869\\n' | security -i -q"
+probe lim 15 bash -c "security add-generic-password -U -a p5 -s cervus-probe -w 6869 </dev/null"
+for a in p1 p2 p3 p4 p5; do echo "probe stored $a: $(lim 10 security find-generic-password -a $a -s cervus-probe -w 2>&1 | head -1)"; done
 "$B/cervusd" --vault-bin "$B/cervus-vault" --vault-dir "$T/vault" --config "$T/config.json" 2>"$T/d.log" </dev/null >/dev/null & D=$!
 sleep 1
 P='pass "with" $pecial chars ç 1'
