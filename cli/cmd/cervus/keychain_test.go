@@ -10,8 +10,9 @@ import (
 func fakeSecretTool(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
-	old := runSecretTool
-	t.Cleanup(func() { runSecretTool = old })
+	old, oldOS := runSecretTool, keychainOS
+	t.Cleanup(func() { runSecretTool, keychainOS = old, oldOS })
+	keychainOS = "linux"
 	runSecretTool = func(stdin string, args ...string) (string, error) {
 		calls = append(calls, strings.Join(args, " ")+"|"+stdin)
 		if args[0] == "lookup" {
@@ -113,7 +114,10 @@ func fakeSecurity(t *testing.T) (calls *[]string, item *string) {
 		c = append(c, strings.Join(args, " ")+"|"+stdin)
 		switch args[0] {
 		case "-i":
-			f := strings.Fields(stdin)
+			if !strings.HasSuffix(stdin, "\nexit\n") {
+				t.Errorf("interactive mode must be told to end: %q", stdin)
+			}
+			f := strings.Fields(strings.TrimSuffix(stdin, "exit\n"))
 			v = f[len(f)-1]
 		case "find-generic-password":
 			if v == "" {

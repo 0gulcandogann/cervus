@@ -6,7 +6,7 @@ echo "$*" >> "$FAKE_KEYRING.args"
 [ -e "$FAKE_KEYRING.closed" ] && exit 1 # a locked keychain answers nothing
 case "$1" in
   -i) # the real interactive mode says nothing about a failure, and neither does this
-    line=$(cat); value=${line##* -w }; value=${value%%[[:space:]]*}
+    line=$(head -1); value=${line##* -w }; value=${value%%[[:space:]]*}
     python3 -c 'import sys; open(sys.argv[1],"wb").write(bytes.fromhex(sys.argv[2]))' "$FAKE_KEYRING" "$value" ;;
   find-generic-password)
     [ -s "$FAKE_KEYRING" ] || exit 44

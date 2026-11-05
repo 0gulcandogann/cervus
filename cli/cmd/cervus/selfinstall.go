@@ -22,7 +22,21 @@ func selfInstallDir(home string) string { return filepath.Join(home, ".local", "
 
 func selfInstallLink(home string) string { return filepath.Join(home, ".local", "bin", "cervus") }
 
-func runningInstalled(exe, home string) bool { return filepath.Dir(exe) == selfInstallDir(home) }
+// runningInstalled compares without links: the path of the running program never contains any, but home
+// can, because /home is a link on some systems and temporary folders are on macOS.
+func runningInstalled(exe, home string) bool {
+	return sameFolder(filepath.Dir(exe), selfInstallDir(home))
+}
+
+func sameFolder(a, b string) bool {
+	if real, err := filepath.EvalSymlinks(a); err == nil {
+		a = real
+	}
+	if real, err := filepath.EvalSymlinks(b); err == nil {
+		b = real
+	}
+	return a == b
+}
 
 // selfInstallCurrent is true when the install folder already holds these exact programs.
 func selfInstallCurrent(exe, home string) bool {
@@ -146,7 +160,7 @@ func serviceRunsFrom(dir, home string) bool {
 		return false
 	}
 	program := serviceProgram(runtime.GOOS, string(data))
-	return program != "" && filepath.Dir(program) == dir
+	return program != "" && sameFolder(filepath.Dir(program), dir)
 }
 
 // shellPathLine puts ~/.local/bin on PATH in new shells, because many systems leave it off. It is only

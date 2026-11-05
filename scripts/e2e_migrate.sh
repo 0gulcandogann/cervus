@@ -128,7 +128,7 @@ cat > "$T/fakebin/launchctl" <<FAKE
 echo "\$*" >> "$T/systemctl.log"
 case "\$1" in
   print) [ -e "$T/svc.pid" ] || exit 1 ;;
-  bootstrap) "$BIN_ABS/cervusd" --socket "$T/xdg/cervus/cervus.sock" --vault-bin "$BIN_ABS/cervus-vault" --vault-dir "$T/svc-vault" --config "$T/svc.json" >/dev/null 2>&1 & echo \$! > "$T/svc.pid" ;;
+  bootstrap) nohup "$BIN_ABS/cervusd" --socket "$T/xdg/cervus/cervus.sock" --vault-bin "$BIN_ABS/cervus-vault" --vault-dir "$T/svc-vault" --config "$T/svc.json" >/dev/null 2>&1 & echo \$! > "$T/svc.pid" ;;
   bootout) [ -e "$T/svc.pid" ] && kill "\$(cat "$T/svc.pid")"; rm -f "$T/svc.pid"; sleep 0.3 ;;
 esac
 exit 0
@@ -217,7 +217,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   I="$HOME/.local/share/cervus"
   for p in cervus cervusd cervus-vault; do cmp -s "$B/$p" "$I/$p" && ok "setup installs $p" || bad "setup install $p"; done
   [ "$(readlink "$HOME/.local/bin/cervus")" = "$I/cervus" ] && ok "setup links cervus into ~/.local/bin" || bad "setup link"
-  svc_runs "$I" "$(svc_file "$HOME")" && ok "the service runs the installed copy" || bad "service path: $(cat "$(svc_file "$HOME")" | head -12)"
+  svc_runs "$(cd "$I" && pwd -P)" "$(svc_file "$HOME")" && ok "the service runs the installed copy" || bad "service path: $(cat "$(svc_file "$HOME")" | head -12)"
   grep -qF "$I/cervus credential-process" "$AWS_CONFIG_FILE" && ok "the AWS profile runs the installed copy" || bad "profile path: $(grep credential_process "$AWS_CONFIG_FILE")"
   grep -qF "$I/cervus" "$HOME/.zshrc" && ok "the shell integration runs the installed copy" || bad "rc path"
   "$I/cervus" init-shell zsh | grep -qF '.local/bin:$PATH' && ok "the installed copy puts ~/.local/bin on PATH" || bad "PATH line"

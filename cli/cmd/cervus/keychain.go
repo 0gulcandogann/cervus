@@ -66,7 +66,7 @@ func securityAccount(vaultDir string) string {
 // so the item is read back. The value is hex, because security prints some stored bytes as hex anyway.
 func securityStore(vaultDir, passphrase string) error {
 	value := hex.EncodeToString([]byte(passphrase))
-	cmd := fmt.Sprintf("add-generic-password -U -a %s -s cervus -l \"Cervus vault passphrase\" -w %s\n", securityAccount(vaultDir), value)
+	cmd := fmt.Sprintf("add-generic-password -U -a %s -s cervus -l \"Cervus vault passphrase\" -w %s\nexit\n", securityAccount(vaultDir), value)
 	if _, err := runSecurity(cmd, "-i"); err != nil {
 		return err
 	}

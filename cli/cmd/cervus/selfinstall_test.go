@@ -117,6 +117,30 @@ func TestSelfInstalledFromTheInstallFolder(t *testing.T) {
 	}
 }
 
+// /home is a link on some systems, and the path of the running program never contains links.
+func TestSelfInstalledWhenHomeIsBehindALink(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "var-home", "u")
+	if err := os.MkdirAll(filepath.Join(real, ".local", "share", "cervus"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "home")
+	if err := os.Symlink(filepath.Join(root, "var-home"), link); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := filepath.EvalSymlinks(filepath.Join(real, ".local", "share", "cervus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe = filepath.Join(exe, "cervus")
+	if !runningInstalled(exe, filepath.Join(link, "u")) {
+		t.Error("the installed copy was not recognized through the link")
+	}
+	if shellPathLine(exe, filepath.Join(link, "u")) == "" {
+		t.Error("no PATH line through the link")
+	}
+}
+
 func TestShellPathLineOnlyForTheInstalledCopy(t *testing.T) {
 	home := "/home/u"
 	if line := shellPathLine("/home/u/.local/share/cervus/cervus", home); !strings.Contains(line, `"$HOME/.local/bin:$PATH"`) {
