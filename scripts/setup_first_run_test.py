@@ -24,6 +24,9 @@ replies += [
 ]
 service = (r"at every login\? \[Y/n\]", lambda s: "y")
 replies.insert(0, service)
+# A first run asks to install; a later run with the same programs does not.
+install = re.compile(r"Install Cervus to [^\n]*\[Y/n\]")
+install_answered = False
 end = time.time() + 30
 while time.time() < end:
     r, _, _ = select.select([fd], [], [], 0.1)
@@ -35,6 +38,11 @@ while time.time() < end:
         if not data:
             break
         out += data.decode(errors="replace")
+    if not install_answered:
+        m = install.search(out, mark)
+        if m:
+            mark, install_answered = m.end(), True
+            os.write(fd, b"y\n")
     if replies:
         m = re.compile(replies[0][0]).search(out, mark)
         if m:

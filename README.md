@@ -133,11 +133,13 @@ tar -xzf "cervus-$V-$P.tar.gz"
 export PATH="$PWD/cervus-$V-$P:$PATH"
 ```
 
-Then run `cervus` to set it up. It opens like this and asks before each change:
+Then run `cervus`. It opens like this and asks before each change. It copies the three programs to `~/.local/share/cervus` and links `~/.local/bin/cervus`, so you can delete the downloaded folder afterwards:
 
 ![Running cervus: a white deer and a blue cloud of light with the Cervus wordmark, followed by the first setup question](docs/assets/setup.gif)
 
 <sub>The real first run, stopped at its first question. Without 24-bit color you get the plain wordmark.</sub>
+
+To update, do the same with the new version. To remove the programs, run `cervus uninstall-service`, then delete `~/.local/share/cervus` and `~/.local/bin/cervus`. Your vaults in `~/.cervus` stay until you delete them too.
 
 Linux builds need glibc 2.34 or newer. Only the Linux amd64 build has been run. The macOS builds have never been run and are not notarized.
 

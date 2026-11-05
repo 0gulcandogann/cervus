@@ -423,7 +423,7 @@ func cmdInitShell(args []string) error {
 			}
 		}
 	}
-	script = renderShellScript(strings.ReplaceAll(script, "@@BIN@@", shellQuote(exe)), key)
+	script = shellPathLine(exe, home) + renderShellScript(strings.ReplaceAll(script, "@@BIN@@", shellQuote(exe)), key)
 	if !*install {
 		fmt.Print(script)
 		return nil

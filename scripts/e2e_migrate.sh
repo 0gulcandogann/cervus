@@ -179,7 +179,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   export PATH="$T/fakekc:$PATH" FAKE_KEYRING="$T/fake-keyring"
   [ "$(command -v secret-tool)" = "$T/fakekc/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
   unset CERVUS_NO_KEYCHAIN
-  FIRST() { python3 -I "$HERE/setup_first_run_test.py" "$B/cervus" "first run passphrase" "$1"; }
+  FIRST() { NO_COLOR=1 python3 -I "$HERE/setup_first_run_test.py" "$B/cervus" "first run passphrase" "$1"; }
   fresh() { [ -e "$T/svc.pid" ] && kill "$(cat "$T/svc.pid")" 2>/dev/null; sleep 0.3; rm -rf "$T/svc-vault" "$T/svc.pid" "$T/svc.json" "$HOME/.zshrc" "$AWS_CONFIG_FILE" "$FAKE_KEYRING" "$HOME/.config/systemd" ; }
   fresh
   FIRST n > "$T/first.txt" 2>&1 && ok "a first run on a terminal finishes" || bad "first run: $(tail -3 "$T/first.txt")"
@@ -187,7 +187,15 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   grep -q "any program running as you" "$T/first.txt" && ok "it offers the keychain and states the trade-off" || bad "first run keychain offer"
   [ ! -e "$FAKE_KEYRING" ] && [ ! -e "$T/svc-vault/keychain-enabled" ] && ok "declining the keychain stores nothing" || bad "first run keychain declined"
   grep -q "After a restart" "$T/first.txt" && grep -q "asks for its passphrase" "$T/first.txt" && ok "it says what happens after a restart" || bad "first run restart note"
-  grep -q "█" "$T/first.txt" && ok "a first run on a terminal shows the banner" || bad "first run banner"
+  [ "$(grep -c "█" "$T/first.txt")" -ge 1 ] && ok "a first run on a terminal shows the banner" || bad "first run banner"
+  [ "$(grep -c "^ ██████╗███████╗" "$T/first.txt")" = 1 ] && ok "the banner shows once, not again after installing" || bad "banner count: $(grep -c "^ ██████╗███████╗" "$T/first.txt")"
+  I="$HOME/.local/share/cervus"
+  for p in cervus cervusd cervus-vault; do cmp -s "$B/$p" "$I/$p" && ok "setup installs $p" || bad "setup install $p"; done
+  [ "$(readlink "$HOME/.local/bin/cervus")" = "$I/cervus" ] && ok "setup links cervus into ~/.local/bin" || bad "setup link"
+  grep -qF "ExecStart=\"$I/cervusd\"" "$HOME/.config/systemd/user/cervusd.service" && ok "the service runs the installed copy" || bad "service path: $(grep ExecStart "$HOME/.config/systemd/user/cervusd.service")"
+  grep -qF "$I/cervus credential-process" "$AWS_CONFIG_FILE" && ok "the AWS profile runs the installed copy" || bad "profile path: $(grep credential_process "$AWS_CONFIG_FILE")"
+  grep -qF "$I/cervus" "$HOME/.zshrc" && ok "the shell integration runs the installed copy" || bad "rc path"
+  "$I/cervus" init-shell zsh | grep -qF '.local/bin:$PATH' && ok "the installed copy puts ~/.local/bin on PATH" || bad "PATH line"
   grep -q "AGE-SECRET-KEY" "$T/first.txt" && bad "recovery key in test output" || ok "the test output holds no recovery key"
   cv lock >/dev/null; cv unlock </dev/null >/dev/null 2>&1 && bad "unlocked with nothing stored" || ok "without the keychain a restart needs the passphrase"
   fresh

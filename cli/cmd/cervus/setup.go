@@ -106,7 +106,11 @@ func cmdSetup(args []string) error {
 	if err != nil {
 		return err
 	}
-	printBanner(os.Stdout)
+	continued := os.Getenv(setupContinuedEnv) != ""
+	os.Unsetenv(setupContinuedEnv)
+	if !continued {
+		printBanner(os.Stdout)
+	}
 	confirm := func(question string) (bool, error) {
 		if *yes {
 			return true, nil
@@ -124,6 +128,12 @@ func cmdSetup(args []string) error {
 		return a == "" || a == "y" || a == "yes", nil
 	}
 	changed, declined := false, false
+
+	if !continued {
+		if declined, err = offerSelfInstall(confirm, home, *yes); err != nil {
+			return err
+		}
+	}
 
 	if !daemonReachable(client.SocketPath()) {
 		ok, err := confirm("Start the Cervus daemon now and at every login?")
