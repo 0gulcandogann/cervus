@@ -86,6 +86,7 @@ jobs:
           go-version: stable
           cache: false
       - run: make build
+      - run: BIN=$PWD/bin bash scripts/mac_keychain_test.sh
       - run: BIN=$PWD/bin bash scripts/e2e.sh
         if: always()
       - run: BIN=$PWD/bin bash scripts/e2e_aws.sh

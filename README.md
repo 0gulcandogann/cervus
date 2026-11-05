@@ -127,7 +127,7 @@ Run `cervus help` for every command. After upgrading, restart `cervusd`: an olde
 
 ### Optional: fewer passphrase prompts
 
-`cervus keychain enable` keeps a vault's passphrase in the Linux Secret Service, using libsecret's `secret-tool`. It is off by default, so read this first:
+`cervus keychain enable` keeps a vault's passphrase in the Linux Secret Service, using libsecret's `secret-tool`, or in the macOS login keychain, using `security`. It is off by default, so read this first:
 
 - While your login keyring is open, often the whole session, any program running as you can read the passphrase and open the vault, MFA-protected roles included.
 - The vault reopens by itself after an idle lock. After `cervus lock` it stays locked until `cervus unlock`.
@@ -203,7 +203,6 @@ The AWS signer is checked against the official AWS SigV4 example, and TOTP again
 
 - Finish real-AWS testing
 - Encrypt role ARNs and MFA serials
-- macOS: Keychain and peer check
 - Hardening and fuzz tests
 - Independent security review
 

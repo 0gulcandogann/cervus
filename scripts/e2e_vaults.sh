@@ -168,7 +168,7 @@ CERVUS_SESSION=shell-7 cv use home 2>&1 | grep -q "vault name" && ok "a bad vaul
 cp "$T/config.bak" "$T/config.json"
 
 # --- the keychain hold works per vault, against a fake secret-tool
-mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
+mkdir -p "$T/fakebin"; cp "$HERE/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"; cp "$HERE/fake_security.sh" "$T/fakebin/security"; chmod +x "$T/fakebin/security"
 (
   unset CERVUS_NO_KEYCHAIN
   export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring" CERVUS_SESSION=shell-8

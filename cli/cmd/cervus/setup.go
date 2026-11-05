@@ -253,10 +253,10 @@ func cmdSetup(args []string) error {
 // offerKeychain asks once, right after the vault is made, whether a restart should need the passphrase.
 // The safe answer is the default, and --yes never takes this step: it is a trade-off, not a chore.
 func offerKeychain() {
-	if runtime.GOOS != "linux" || keychainTurnedOff() {
+	if !keychainSupported() || keychainTurnedOff() {
 		return
 	}
-	if _, err := exec.LookPath("secret-tool"); err != nil {
+	if _, err := exec.LookPath(keychainProgram()); err != nil {
 		return
 	}
 	dir, err := currentVaultDir("")

@@ -122,12 +122,35 @@ esac
 exit 0
 FAKE
 chmod +x "$T/fakebin/systemctl"
-UNIT="$HOME/.config/systemd/user/cervusd.service"
+# The same stand-in for launchd on macOS, so the real service manager is never called there either.
+cat > "$T/fakebin/launchctl" <<FAKE
+#!/usr/bin/env bash
+echo "\$*" >> "$T/systemctl.log"
+case "\$1" in
+  print) [ -e "$T/svc.pid" ] || exit 1 ;;
+  bootstrap) "$BIN_ABS/cervusd" --socket "$T/xdg/cervus/cervus.sock" --vault-bin "$BIN_ABS/cervus-vault" --vault-dir "$T/svc-vault" --config "$T/svc.json" >/dev/null 2>&1 & echo \$! > "$T/svc.pid" ;;
+  bootout) [ -e "$T/svc.pid" ] && kill "\$(cat "$T/svc.pid")"; rm -f "$T/svc.pid"; sleep 0.3 ;;
+esac
+exit 0
+FAKE
+chmod +x "$T/fakebin/launchctl"
+if [ "$(uname)" = Darwin ]; then
+  svc_file() { echo "$1/Library/LaunchAgents/cervus.daemon.plist"; }
+  svc_runs() { grep -qF "<string>$1/cervusd</string>" "$2"; }
+  svc_restart() { PATH="$T/fakebin:$PATH" launchctl bootstrap x y; }
+  SVC_ENABLED='bootstrap'; SVC_STARTED='bootstrap'
+else
+  svc_file() { echo "$1/.config/systemd/user/cervusd.service"; }
+  svc_runs() { grep -qF "ExecStart=\"$1/cervusd\"" "$2"; }
+  svc_restart() { PATH="$T/fakebin:$PATH" systemctl --user restart cervusd.service; }
+  SVC_ENABLED='enable cervusd.service'; SVC_STARTED='restart cervusd.service'
+fi
+UNIT="$(svc_file "$HOME")"
 SAVED_PATH=$PATH; export PATH="$T/fakebin:$PATH"
 cv doctor 2>&1 | grep -q "cervus install-service" && ok "doctor suggests install-service" || bad "doctor suggests install-service"
 cv install-service > "$T/inst.txt" 2>&1 && ok "install-service succeeds" || bad "install-service: $(cat "$T/inst.txt")"
-grep -qF "ExecStart=\"$BIN_ABS/cervusd\"" "$UNIT" && ok "unit points at this cervusd" || bad "unit path"
-grep -q 'enable cervusd.service' "$T/systemctl.log" && ok "service is enabled" || bad "service enable"
+svc_runs "$BIN_ABS" "$UNIT" && ok "unit points at this cervusd" || bad "unit path"
+grep -q "$SVC_ENABLED" "$T/systemctl.log" && ok "service is enabled" || bad "service enable"
 cv doctor 2>&1 | grep -q "login service is installed and running" && ok "doctor reports the running service" || bad "doctor service state"
 cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service removes the unit" || bad "uninstall unit"
 [ -d "$T/vault" ] && ok "uninstall-service keeps the vault" || bad "uninstall vault"
@@ -139,7 +162,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   mkdir -p "$HOME"; rm -f "$T/svc.pid"
   cv setup </dev/null 2>&1 | grep -q -- "--yes" && [ ! -e "$HOME/.zshrc" ] && ok "setup without a terminal needs --yes and changes nothing" || bad "setup needs --yes"
   printf 'setup test passphrase\nsetup test passphrase\n' | cv setup --yes > "$T/setup.txt" 2>&1 && ok "setup succeeds" || bad "setup: $(tail -3 "$T/setup.txt")"
-  grep -q 'restart cervusd.service' "$T/systemctl.log" && ok "setup starts the service" || bad "setup service"
+  grep -q "$SVC_STARTED" "$T/systemctl.log" && ok "setup starts the service" || bad "setup service"
   cv status | grep -q unlocked && ok "setup creates the vault" || bad "setup vault"
   grep -q "█" "$T/setup.txt" && bad "banner printed into a pipe" || ok "no banner when the output is not a terminal"
   grep -q "RECOVERY KEY" "$T/setup.txt" && ok "setup shows the recovery key" || bad "setup recovery key"
@@ -177,7 +200,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   cv uninstall-service >/dev/null 2>&1
 
   # A first run on a terminal, then a stand-in for a reboot. Fake keyring only.
-  mkdir -p "$T/fakekc"; cp "$HERE/fake_secret_tool.sh" "$T/fakekc/secret-tool"; chmod +x "$T/fakekc/secret-tool"
+  mkdir -p "$T/fakekc"; cp "$HERE/fake_secret_tool.sh" "$T/fakekc/secret-tool"; chmod +x "$T/fakekc/secret-tool"; cp "$HERE/fake_security.sh" "$T/fakekc/security"; chmod +x "$T/fakekc/security"
   export PATH="$T/fakekc:$PATH" FAKE_KEYRING="$T/fake-keyring"
   [ "$(command -v secret-tool)" = "$T/fakekc/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }
   unset CERVUS_NO_KEYCHAIN
@@ -194,7 +217,7 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   I="$HOME/.local/share/cervus"
   for p in cervus cervusd cervus-vault; do cmp -s "$B/$p" "$I/$p" && ok "setup installs $p" || bad "setup install $p"; done
   [ "$(readlink "$HOME/.local/bin/cervus")" = "$I/cervus" ] && ok "setup links cervus into ~/.local/bin" || bad "setup link"
-  grep -qF "ExecStart=\"$I/cervusd\"" "$HOME/.config/systemd/user/cervusd.service" && ok "the service runs the installed copy" || bad "service path: $(grep ExecStart "$HOME/.config/systemd/user/cervusd.service")"
+  svc_runs "$I" "$(svc_file "$HOME")" && ok "the service runs the installed copy" || bad "service path: $(cat "$(svc_file "$HOME")" | head -12)"
   grep -qF "$I/cervus credential-process" "$AWS_CONFIG_FILE" && ok "the AWS profile runs the installed copy" || bad "profile path: $(grep credential_process "$AWS_CONFIG_FILE")"
   grep -qF "$I/cervus" "$HOME/.zshrc" && ok "the shell integration runs the installed copy" || bad "rc path"
   "$I/cervus" init-shell zsh | grep -qF '.local/bin:$PATH' && ok "the installed copy puts ~/.local/bin on PATH" || bad "PATH line"
@@ -204,8 +227,8 @@ cv uninstall-service >/dev/null 2>&1; [ ! -e "$UNIT" ] && ok "uninstall-service 
   FIRST y > "$T/first.txt" 2>&1 && ok "a first run with the keychain finishes" || bad "first run keychain: $(tail -3 "$T/first.txt")"
   [ "$(cat "$FAKE_KEYRING")" = "first run passphrase" ] && [ -e "$T/svc-vault/keychain-enabled" ] && ok "accepting stores the passphrase" || bad "first run keychain store"
   grep -q "opens by itself" "$T/first.txt" && ok "it says the vault opens by itself" || bad "first run keychain note"
-  PATH="$T/fakebin:$PATH" systemctl --user restart cervusd.service; kill "$(cat "$T/svc.pid")" 2>/dev/null; rm -f "$T/svc.pid"; sleep 0.5
-  PATH="$T/fakebin:$PATH" systemctl --user restart cervusd.service; sleep 1
+  svc_restart; kill "$(cat "$T/svc.pid")" 2>/dev/null; rm -f "$T/svc.pid"; sleep 0.5
+  svc_restart; sleep 1
   cv status | grep -q locked && ok "after a restart the vault starts locked" || bad "restart locked"
   cv unlock </dev/null 2>&1 | grep -q "from the keychain" && ok "after a restart the keychain opens it without asking" || bad "restart keychain"
   cv uninstall-service >/dev/null 2>&1

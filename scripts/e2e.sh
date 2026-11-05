@@ -86,7 +86,7 @@ printf "$RK\n$NEW\n$NEW\n" | "$B/cervus" recover >/dev/null 2>&1 && ok "the reco
 grep -q "cervus recover" <(printf '%s\n%s\n%s\n' "$NEW" "$NEW2" "$NEW2" | "$B/cervus" passwd 2>&1) && ok "passwd explains what to do after a leak" || bad "passwd leak note"
 ! grep -rqE "$NEW2|$NEW|WRONG-CURRENT-PASS" "$T/config.json" "$T/d.log" "$T"/audit.log "$T/vault2" 2>/dev/null && ok "no passphrase in the logs" || bad "passphrase in logs"
 # --- keychain, against a fake secret-tool
-mkdir -p "$T/fakebin"; cp "$(dirname "$0")/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"
+mkdir -p "$T/fakebin"; cp "$(dirname "$0")/fake_secret_tool.sh" "$T/fakebin/secret-tool"; chmod +x "$T/fakebin/secret-tool"; cp "$(dirname "$0")/fake_security.sh" "$T/fakebin/security"; chmod +x "$T/fakebin/security"
 (
   export PATH="$T/fakebin:$PATH" FAKE_KEYRING="$T/fake-keyring"
   [ "$(command -v secret-tool)" = "$T/fakebin/secret-tool" ] || { echo "FAIL: the fake secret-tool is not in use"; exit 1; }

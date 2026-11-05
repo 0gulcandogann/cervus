@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -97,5 +98,86 @@ func TestKeychainEnableRefusedByEnvironment(t *testing.T) {
 	err := keychainEnable(t.TempDir(), "", true)
 	if err == nil || !strings.Contains(err.Error(), "CERVUS_NO_KEYCHAIN") || len(*calls) != 0 {
 		t.Fatalf("err=%v calls=%v", err, *calls)
+	}
+}
+
+// fakeSecurity keeps one item, like the macOS keychain, and records every call.
+func fakeSecurity(t *testing.T) (calls *[]string, item *string) {
+	t.Helper()
+	var c []string
+	var v string
+	oldRun, oldOS := runSecurity, keychainOS
+	t.Cleanup(func() { runSecurity, keychainOS = oldRun, oldOS })
+	keychainOS = "darwin"
+	runSecurity = func(stdin string, args ...string) (string, error) {
+		c = append(c, strings.Join(args, " ")+"|"+stdin)
+		switch args[0] {
+		case "-i":
+			f := strings.Fields(stdin)
+			v = f[len(f)-1]
+		case "find-generic-password":
+			if v == "" {
+				return "", errors.New("not found")
+			}
+			return v + "\n", nil
+		case "delete-generic-password":
+			v = ""
+		}
+		return "", nil
+	}
+	return &c, &v
+}
+
+func TestMacKeychainKeepsThePassphraseOutOfArguments(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
+	calls, _ := fakeSecurity(t)
+	secret := `pass "with" $pecial ç`
+	if err := keychainStore("/v", secret); err != nil {
+		t.Fatal(err)
+	}
+	if got := keychainLookup("/v"); got != secret {
+		t.Fatalf("lookup %q", got)
+	}
+	for _, c := range *calls {
+		args, stdin, _ := strings.Cut(c, "|")
+		if strings.Contains(args, "with") || strings.Contains(args, hex.EncodeToString([]byte(secret))) {
+			t.Fatalf("secret in arguments: %s", args)
+		}
+		if strings.Contains(stdin, `"with"`) {
+			t.Fatalf("secret in plain text on stdin: %s", stdin)
+		}
+	}
+}
+
+func TestMacKeychainReportsAStoreThatDidNotHappen(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
+	fakeSecurity(t)
+	old := runSecurity
+	runSecurity = func(stdin string, args ...string) (string, error) {
+		if args[0] == "-i" { // the real interactive mode exits 0 on a failed command
+			return "", nil
+		}
+		return old(stdin, args...)
+	}
+	if err := keychainStore("/v", "secret"); err == nil {
+		t.Fatal("a store that did not keep the value must fail")
+	}
+}
+
+func TestMacKeychainIgnoresAValueItDidNotWrite(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
+	_, item := fakeSecurity(t)
+	*item = "not hex at all"
+	if got := keychainLookup("/v"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMacKeychainVaultsDoNotShareAnItem(t *testing.T) {
+	if securityAccount("/a") == securityAccount("/b") {
+		t.Fatal("two vaults got one item")
+	}
+	if a := securityAccount(`/with space/"quote"`); strings.ContainsAny(a, " \"") {
+		t.Fatalf("needs quoting: %s", a)
 	}
 }

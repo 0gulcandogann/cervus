@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,19 +18,83 @@ import (
 	"cervus/internal/client"
 )
 
-// The keychain holds the vault passphrase through libsecret's secret-tool, an optional external
-// program, so Cervus itself gains no dependency. Secrets go over stdin, never in arguments.
-var runSecretTool = func(stdin string, args ...string) (string, error) {
+// The keychain holds the vault passphrase through an external program, libsecret's secret-tool on
+// Linux and security on macOS, so Cervus itself gains no dependency. Secrets go over stdin, never in
+// arguments.
+func runKeychainProgram(program, stdin string, args ...string) (string, error) {
 	// A locked keyring can open a dialog nobody answers, so this must not wait forever.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "secret-tool", args...)
+	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.WaitDelay = time.Second // the timeout must hold even if a child keeps the pipe open
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
 	return out.String(), err
+}
+
+var (
+	runSecretTool = func(stdin string, args ...string) (string, error) {
+		return runKeychainProgram("secret-tool", stdin, args...)
+	}
+	runSecurity = func(stdin string, args ...string) (string, error) {
+		return runKeychainProgram("security", stdin, args...)
+	}
+	keychainOS = runtime.GOOS
+)
+
+const securityItemNotFound = 44 // what security exits with when there is no such item
+
+func keychainProgram() string {
+	if keychainOS == "darwin" {
+		return "security"
+	}
+	return "secret-tool"
+}
+
+func keychainSupported() bool { return keychainOS == "linux" || keychainOS == "darwin" }
+
+// securityAccount names a vault's item. A hash, so no path needs quoting in a security command.
+func securityAccount(vaultDir string) string {
+	sum := sha256.Sum256([]byte(vaultDir))
+	return "vault-" + hex.EncodeToString(sum[:8])
+}
+
+// securityStore feeds the command through stdin, because security reads the password from its arguments
+// otherwise, where every program could see it. Its interactive mode reports success whatever happens,
+// so the item is read back. The value is hex, because security prints some stored bytes as hex anyway.
+func securityStore(vaultDir, passphrase string) error {
+	value := hex.EncodeToString([]byte(passphrase))
+	cmd := fmt.Sprintf("add-generic-password -U -a %s -s cervus -l \"Cervus vault passphrase\" -w %s\n", securityAccount(vaultDir), value)
+	if _, err := runSecurity(cmd, "-i"); err != nil {
+		return err
+	}
+	if securityLookup(vaultDir) != passphrase {
+		return errors.New("the macOS keychain did not keep it; is your login keychain unlocked?")
+	}
+	return nil
+}
+
+func securityLookup(vaultDir string) string {
+	out, err := runSecurity("", "find-generic-password", "-a", securityAccount(vaultDir), "-s", "cervus", "-w")
+	if err != nil {
+		return ""
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func securityClear(vaultDir string) error {
+	_, err := runSecurity("", "delete-generic-password", "-a", securityAccount(vaultDir), "-s", "cervus")
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == securityItemNotFound {
+		return nil
+	}
+	return err
 }
 
 // Markers in the vault directory, neither secret. "Enabled" means the user opted in, so nobody else
@@ -61,6 +127,9 @@ func setKeychainMarker(dir, name string, on bool) error {
 func keychainAttrs(vaultDir string) []string { return []string{"service", "cervus", "vault", vaultDir} }
 
 func keychainStore(vaultDir, passphrase string) error {
+	if keychainOS == "darwin" {
+		return securityStore(vaultDir, passphrase)
+	}
 	_, err := runSecretTool(passphrase, append([]string{"store", "--label=Cervus vault passphrase"}, keychainAttrs(vaultDir)...)...)
 	return err
 }
@@ -68,6 +137,9 @@ func keychainStore(vaultDir, passphrase string) error {
 func keychainLookup(vaultDir string) string {
 	if keychainTurnedOff() {
 		return ""
+	}
+	if keychainOS == "darwin" {
+		return securityLookup(vaultDir)
 	}
 	out, err := runSecretTool("", append([]string{"lookup"}, keychainAttrs(vaultDir)...)...)
 	if err != nil {
@@ -77,6 +149,9 @@ func keychainLookup(vaultDir string) string {
 }
 
 func keychainClear(vaultDir string) error {
+	if keychainOS == "darwin" {
+		return securityClear(vaultDir)
+	}
 	_, err := runSecretTool("", append([]string{"clear"}, keychainAttrs(vaultDir)...)...)
 	return err
 }
@@ -153,7 +228,7 @@ func isAuthFailure(err error) bool {
 	return errors.As(err, &re) && re.Code == "auth_failed"
 }
 
-const keychainTradeoff = `This stores your vault passphrase in the OS keychain (Secret Service).
+const keychainTradeoff = `This stores your vault passphrase in the OS keychain.
 - The vault reopens by itself after an idle lock, for MFA-protected roles too, with nobody present.
   After "cervus lock" it stays locked until you run "cervus unlock".
 - While your login keyring is open, which is often the whole session even with the screen locked,
@@ -221,10 +296,13 @@ func keychainEnable(dir, vault string, yes bool) error {
 	if keychainTurnedOff() {
 		return errors.New(keychainDisabledMsg)
 	}
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("the keychain is only built for Linux so far, not %s", runtime.GOOS)
+	if !keychainSupported() {
+		return fmt.Errorf("the keychain is only built for Linux and macOS, not %s", keychainOS)
 	}
-	if _, err := exec.LookPath("secret-tool"); err != nil {
+	if _, err := exec.LookPath(keychainProgram()); err != nil {
+		if keychainOS == "darwin" {
+			return errors.New("the macOS security program was not found")
+		}
 		return errors.New("secret-tool not found; install libsecret (package libsecret or libsecret-tools)")
 	}
 	fmt.Println(keychainTradeoff)
