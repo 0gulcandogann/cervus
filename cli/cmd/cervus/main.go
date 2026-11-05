@@ -19,7 +19,7 @@ import (
 	"cervus/internal/client"
 )
 
-const version = "0.1.0-beta.1"
+const version = "0.1.0-beta.2"
 
 // Must match the vault's minimum; the vault enforces it too.
 const minPassphraseLen = 10
