@@ -1058,8 +1058,10 @@ func readValue() ([]byte, error) {
 	return io.ReadAll(stdin)
 }
 
-func usage() {
-	fmt.Print(`cervus - encrypted AWS secrets and role switching for your terminal
+func usage() { fmt.Print(styleHelp(usageText(), stdoutColor())) }
+
+func usageText() string {
+	return `cervus - encrypted AWS secrets and role switching for your terminal
 
 Vault:
   setup [--yes]              Get this machine ready (also what cervus alone does in a terminal)
@@ -1068,7 +1070,7 @@ Vault:
   vault create <n> | list    More vaults, each with its own passphrase and recovery key
   unlock | lock | status     Unlock, lock or inspect the vault (unlock and lock take --vault V; lock alone locks all)
   passwd [--vault V]         Change the passphrase
-  keychain enable|disable|status   Keep the passphrase in the OS keychain (Linux, optional)
+  keychain enable|disable|status   Keep the passphrase in the OS keychain (Linux and macOS, optional)
   recover [--drop-local] [--vault V]   Lost your passphrase? Reset it with the recovery key
   secret put [--vault V] [--local] <n>   Store a secret (value from stdin)
                              Without --vault: $CERVUS_VAULT, the active role's vault, else default
@@ -1108,5 +1110,5 @@ AWS:
   uninstall-service          Remove the service; the vault, config and audit log stay
 
   version                    Print version
-`)
+`
 }

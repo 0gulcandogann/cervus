@@ -122,7 +122,7 @@ func offerSelfInstall(confirm func(string) (bool, error), home string, yes bool)
 			return false, err
 		}
 		if !ok {
-			fmt.Printf("Not installed: everything set up now keeps depending on %s.\n", filepath.Dir(exe))
+			sayf("Not installed: everything set up now keeps depending on %s.", filepath.Dir(exe))
 			return true, nil
 		}
 	}
@@ -131,9 +131,9 @@ func offerSelfInstall(confirm func(string) (bool, error), home string, yes bool)
 		return false, err
 	}
 	if copied {
-		fmt.Println("Installed to ~/.local/share/cervus. You can delete the folder it came from.")
+		say("Installed to ~/.local/share/cervus. You can delete the folder it came from.")
 		if daemonReachable(client.SocketPath()) {
-			fmt.Println("The running daemon keeps the old version until it restarts: `cervus install-service` does that, and it locks your vaults.")
+			say("The running daemon keeps the old version until it restarts: `cervus install-service` does that, and it locks your vaults.")
 		}
 	}
 	args := append([]string{installed, "setup"}, setupArgs(yes)...)

@@ -118,7 +118,7 @@ func cmdSetup(args []string) error {
 		if !isTTY(os.Stdin) {
 			return false, fmt.Errorf("setup needs to change something (%s); re-run in a terminal or with --yes", question)
 		}
-		fmt.Printf("%s [Y/n] ", question)
+		fmt.Print(styleQuestion(question, "[Y/n]", stdoutColor()))
 		line, err := stdin.ReadString('\n')
 		if err != nil { // Ctrl-D or a closed terminal is no answer, so it is not a yes
 			fmt.Println()
@@ -192,7 +192,7 @@ func cmdSetup(args []string) error {
 		}
 	} else if self, err := os.Executable(); err == nil {
 		if err := checkCervusProfile(cfgData, credsData, cfgPath, credsPath, self); err != nil {
-			fmt.Printf("Warning: %v\n", err)
+			sayf("Warning: %v", err)
 		}
 	}
 
@@ -219,11 +219,11 @@ func cmdSetup(args []string) error {
 			}
 		}
 	} else {
-		fmt.Printf("Shell %q is not supported yet; only zsh and bash have role switching.\n", shell)
+		sayf("Shell %q is not supported yet; only zsh and bash have role switching.", shell)
 	}
 
 	if !changed && !declined && keyReady {
-		fmt.Println("Everything is already set up.")
+		say("Everything is already set up.")
 	}
 	var users struct {
 		Identities []struct {
@@ -234,19 +234,19 @@ func cmdSetup(args []string) error {
 	fmt.Println()
 	restartNote()
 	if strings.Contains(string(credsData), "aws_secret_access_key") {
-		fmt.Println("Plaintext AWS keys found in " + credsPath + ". Move them into the vault: cervus migrate")
+		say("Plaintext AWS keys found in " + credsPath + ". Move them into the vault: cervus migrate")
 	}
 	if len(users.Identities) == 0 {
-		fmt.Println("Add your first AWS user: cervus identity add <name>   (--own-vault gives it its own vault)")
+		say("Add your first AWS user: cervus identity add <name>   (--own-vault gives it its own vault)")
 	}
 	if !keyReady {
-		fmt.Println("The picker key is not set up in this shell, so there is no shortcut yet. Run `cervus setup` to add it, or use `cervus use <role>`.")
+		say("The picker key is not set up in this shell, so there is no shortcut yet. Run `cervus setup` to add it, or use `cervus use <role>`.")
 		return nil
 	}
 	if os.Getenv("CERVUS_SESSION_OWNER") == "" {
-		fmt.Printf("A running shell cannot pick up a new key by itself: %s.\n", reload)
+		sayf("A running shell cannot pick up a new key by itself: %s.", reload)
 	}
-	fmt.Printf("Then press %s to switch between your roles, users and vaults.\n", currentShellKey().label())
+	sayf("Then press %s to switch between your roles, users and vaults.", currentShellKey().label())
 	return nil
 }
 
@@ -264,9 +264,9 @@ func offerKeychain() {
 		return
 	}
 	fmt.Println()
-	fmt.Println("Optional: open the vault by itself after a restart, so Alt+r needs no passphrase.")
+	say("Optional: open the vault by itself after a restart, so Alt+r needs no passphrase.")
 	if err := keychainEnable(dir, "", false); err != nil && err.Error() != "cancelled" {
-		fmt.Printf("Warning: the keychain was not set up: %v\n", err)
+		sayf("Warning: the keychain was not set up: %v", err)
 	}
 }
 
@@ -277,11 +277,11 @@ func restartNote() {
 		return
 	}
 	if !keychainTurnedOff() && hasKeychainMarker(dir, keychainEnabledFile) {
-		fmt.Println("After a restart the daemon starts at login, and the vault opens by itself when it is first needed.")
+		say("After a restart the daemon starts at login, and the vault opens by itself when it is first needed.")
 		return
 	}
-	fmt.Println("After a restart the daemon starts at login, and the vault stays locked: the picker asks for its passphrase once.")
-	fmt.Println("To skip that, at a security cost: cervus keychain enable")
+	say("After a restart the daemon starts at login, and the vault stays locked: the picker asks for its passphrase once.")
+	say("To skip that, at a security cost: cervus keychain enable")
 }
 
 // shellRC is the file a shell reads at startup; zsh looks in $ZDOTDIR when it is set.
