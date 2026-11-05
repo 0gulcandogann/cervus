@@ -63,9 +63,9 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
         working-directory: cli
-      - run: cargo install cargo-audit --locked --version 0.21.2 && cargo audit
+      - run: cargo install cargo-audit --locked --version 0.22.2 && cargo audit
         working-directory: vault
       - run: |
           go test -run='^$' -fuzz='^FuzzParseINI$' -fuzztime=20s ./cmd/cervus
