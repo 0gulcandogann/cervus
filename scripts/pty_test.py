@@ -51,7 +51,7 @@ class Term:
 
     def run(self, cmd, marker=None, timeout=10):
         marker = marker or "DONE%d" % int(time.time() * 1000 % 100000)
-        self.send(cmd + "; echo " + marker + "_END\r")
+        self.send(cmd + "; echo " + marker + "''_END\r")  # the quotes keep the echoed command from matching
         seg = self.expect(marker + "_END", timeout)
         return seg
 

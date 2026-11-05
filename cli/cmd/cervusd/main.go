@@ -55,6 +55,9 @@ type outResponse struct {
 }
 
 func main() {
+	if err := hardenProcess(); err != nil {
+		log.Printf("warning: core dumps may stay on: %v", err)
+	}
 	socket := flag.String("socket", client.SocketPath(), "daemon socket path")
 	vaultBin := flag.String("vault-bin", "", "path to cervus-vault (default: next to cervusd, then PATH)")
 	vaultDir := flag.String("vault-dir", "", "vault directory (default: ~/.cervus/vault)")

@@ -52,6 +52,27 @@ jobs:
       - run: cargo test --locked
         working-directory: vault
 
+  # Known vulnerabilities in what we depend on, and a short run of each fuzz test.
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        working-directory: cli
+      - run: cargo install cargo-audit --locked --version 0.21.2 && cargo audit
+        working-directory: vault
+      - run: |
+          go test -run='^$' -fuzz='^FuzzParseINI$' -fuzztime=20s ./cmd/cervus
+          go test -run='^$' -fuzz='^FuzzParseShellKey$' -fuzztime=20s ./cmd/cervus
+          go test -run='^$' -fuzz='^FuzzSTSResponses$' -fuzztime=20s ./internal/awsapi
+        working-directory: cli
+
   # The full suites on a real Mac. While this finds out what fails there, it does not block.
   macos-e2e:
     runs-on: macos-15
