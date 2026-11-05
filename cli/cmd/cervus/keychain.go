@@ -62,15 +62,17 @@ func securityAccount(vaultDir string) string {
 }
 
 // securityStore feeds the command through stdin, because security reads the password from its arguments
-// otherwise, where every program could see it. Its interactive mode reports success whatever happens,
-// so the item is read back. The value is hex, because security prints some stored bytes as hex anyway.
+// otherwise, where every program could see it. The item is read back to know whether it was stored. The value is hex, because security prints some stored bytes as hex anyway.
 func securityStore(vaultDir, passphrase string) error {
 	value := hex.EncodeToString([]byte(passphrase))
 	cmd := fmt.Sprintf("add-generic-password -U -a %s -s cervus -l \"Cervus vault passphrase\" -w %s\nexit\n", securityAccount(vaultDir), value)
-	if _, err := runSecurity(cmd, "-i"); err != nil {
-		return err
-	}
+	// Its exit status says nothing useful either way: it is 1 after a successful store. Only the
+	// read-back counts.
+	_, runErr := runSecurity(cmd, "-i")
 	if securityLookup(vaultDir) != passphrase {
+		if runErr != nil {
+			return fmt.Errorf("the macOS keychain did not keep it (%v); is your login keychain unlocked?", runErr)
+		}
 		return errors.New("the macOS keychain did not keep it; is your login keychain unlocked?")
 	}
 	return nil

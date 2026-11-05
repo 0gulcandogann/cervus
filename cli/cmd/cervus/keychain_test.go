@@ -168,6 +168,22 @@ func TestMacKeychainReportsAStoreThatDidNotHappen(t *testing.T) {
 	}
 }
 
+func TestMacKeychainTrustsTheReadBackOverTheExitStatus(t *testing.T) {
+	t.Setenv("CERVUS_NO_KEYCHAIN", "")
+	fakeSecurity(t)
+	old := runSecurity
+	runSecurity = func(stdin string, args ...string) (string, error) {
+		out, _ := old(stdin, args...)
+		if args[0] == "-i" { // what a real Mac does after a successful store
+			return out, errors.New("exit status 1")
+		}
+		return out, nil
+	}
+	if err := keychainStore("/v", "secret"); err != nil {
+		t.Fatalf("a stored value must count: %v", err)
+	}
+}
+
 func TestMacKeychainIgnoresAValueItDidNotWrite(t *testing.T) {
 	t.Setenv("CERVUS_NO_KEYCHAIN", "")
 	_, item := fakeSecurity(t)
