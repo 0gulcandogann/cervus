@@ -104,9 +104,12 @@ def test_shell(name, argv, setup=()):
     if seg is None: bad("%s: protected role asks for confirmation" % name, t.tail())
     else:
         ok("%s: protected role asks for confirmation" % name)
+        answer = len(t.raw)
         t.send("y")
         seg = t.expect('Now using role "gamma"')
         ok("%s: confirming switches to the protected role" % name) if seg else bad("%s: confirm gamma" % name, t.tail())
+        # A line left behind moves the cursor, and zsh then redraws its prompt in the wrong place.
+        ok("%s: the confirmation leaves nothing on screen" % name) if not re.search(r"y\r*\n", t.raw[answer:].split("Now using")[0]) else bad("%s: confirmation line stays" % name, repr(t.raw[answer:][:80]))
     mark = len(t.raw)
     t.run("echo X2", "M4")
     ok("%s: protected role is shown in red" % name) if "\x1b[31m" in t.raw[mark:] else bad("%s: red prompt" % name, repr(t.raw[mark:])[-300:])

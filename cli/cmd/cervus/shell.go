@@ -256,16 +256,18 @@ loop:
 		return nil
 	}
 
+	// The cursor must end where the picker started, or the shell redraws its prompt in the wrong place.
+	clearLine := func() { fmt.Fprint(tty, "\r\x1b[K") }
 	confirm := func() (bool, error) {
 		fmt.Fprintf(tty, "Role %q is protected. Switch to it? [y/N] ", items[choice].Name)
 		b, _ := in.ReadByte()
-		fmt.Fprint(tty, string(b)+"\r\n")
+		clearLine()
 		return b == 'y' || b == 'Y', nil
 	}
 	ask := func(vault string) (string, error) {
 		fmt.Fprint(tty, unlockPrompt(vault))
 		passphrase, err := readHiddenLine(in)
-		fmt.Fprint(tty, "\r\n")
+		clearLine()
 		return passphrase, err
 	}
 	res, err := switchRole(items[choice].Name, false, confirm, ask)
