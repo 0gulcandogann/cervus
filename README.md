@@ -122,7 +122,7 @@ Run `cervus help` for every command. After upgrading, restart `cervusd`: an olde
 Release archives are available for `linux-amd64`, `linux-arm64`, `darwin-arm64` and `darwin-amd64`. Keep the three programs in one folder:
 
 ```sh
-V=0.0.9 P=linux-amd64
+V=0.0.10 P=linux-amd64
 curl -LO "https://github.com/0gulcandogann/cervus/releases/download/v$V/cervus-$V-$P.tar.gz"
 gh attestation verify "cervus-$V-$P.tar.gz" --repo 0gulcandogann/cervus   # optional: proves GitHub Actions built it from this repo
 tar -xzf "cervus-$V-$P.tar.gz"
